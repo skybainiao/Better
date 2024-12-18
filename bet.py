@@ -13,6 +13,11 @@ import time
 import csv
 import traceback
 from flask import Flask, request, jsonify
+import threading
+
+# 用于跟踪抓取线程状态
+thread_status = {}
+status_lock = threading.Lock()
 
 # 固定密码
 FIXED_PASSWORD = 'dddd1111DD'
@@ -405,41 +410,71 @@ def run_scraper(account, market_type, scraper_id):
         driver = None
         try:
             driver = init_driver()
+            with status_lock:
+                thread_status[scraper_id] = "尝试登录..."
+
             if login(driver, account['username']):
+                with status_lock:
+                    thread_status[scraper_id] = "登录成功，导航到足球页面..."
+
                 if navigate_to_football(driver):
-                    # 点击指定的市场类型按钮
-                    button = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable((By.ID, MARKET_TYPES[market_type]))
-                    )
-                    button.click()
-                    print(f"{account['username']} 已点击 {market_type} 按钮")
+                    with status_lock:
+                        thread_status[scraper_id] = "导航到足球页面成功，尝试点击市场类型按钮..."
 
-                    # 等待页面加载
-                    time.sleep(5)
+                    try:
+                        # 点击指定的市场类型按钮
+                        button = WebDriverWait(driver, 10).until(
+                            EC.element_to_be_clickable((By.ID, MARKET_TYPES[market_type]))
+                        )
+                        button.click()
+                        print(f"{account['username']} 已点击 {market_type} 按钮")
 
-                    # 启动发送CSV数据到服务器的线程
-                    server_url = "http://yourserver.com/api/data"  # 替换为实际的服务器URL
-                    info = f"{account['username']} - {market_type}"
-                    sender_thread = threading.Thread(target=send_csv_as_json, args=(filename, server_url, interval, info), daemon=True)
-                    sender_thread.start()
+                        with status_lock:
+                            thread_status[scraper_id] = f"已点击 {market_type} 按钮，开始抓取数据..."
 
-                    # 进入数据抓取循环
-                    while not stop_event.is_set():
-                        try:
-                            soup = get_market_data(driver)
-                            if soup:
-                                data = parse_market_data(soup, market_type)
-                                save_to_csv(data, filename)
-                                #print(f"{account['username']} 成功获取并保存数据")
-                            else:
-                                print(f"{account['username']} 未获取到数据")
-                        except Exception as e:
-                            print(f"{account['username']} 抓取数据时发生错误: {e}")
-                            traceback.print_exc()
-                        time.sleep(interval)
+                        # 等待页面加载
+                        time.sleep(5)
+
+                        # 启动发送CSV数据到服务器的线程
+                        server_url = "http://yourserver.com/api/data"  # 替换为实际的服务器URL
+                        info = f"{account['username']} - {market_type}"
+                        sender_thread = threading.Thread(target=send_csv_as_json, args=(filename, server_url, interval, info), daemon=True)
+                        sender_thread.start()
+
+                        # 进入数据抓取循环
+                        while not stop_event.is_set():
+                            try:
+                                soup = get_market_data(driver)
+                                if soup:
+                                    data = parse_market_data(soup, market_type)
+                                    save_to_csv(data, filename)
+                                    #print(f"{account['username']} 成功获取并保存数据")
+                                else:
+                                    print(f"{account['username']} 未获取到数据")
+                            except Exception as e:
+                                print(f"{account['username']} 抓取数据时发生错误: {e}")
+                                traceback.print_exc()
+                            time.sleep(interval)
+                    except Exception as e:
+                        print(f"{account['username']} 未找到市场类型按钮: {market_type}")
+                        traceback.print_exc()
+                        with status_lock:
+                            thread_status[scraper_id] = f"未找到市场类型按钮: {market_type}。线程已关闭。"
+                        break  # 退出循环，结束线程
+                else:
+                    with status_lock:
+                        thread_status[scraper_id] = "未找到足球页面。线程已关闭。"
+                    break  # 退出循环，结束线程
+            else:
+                with status_lock:
+                    thread_status[scraper_id] = "登录失败。线程已关闭。"
+                break  # 退出循环，结束线程
         except Exception as e:
             print(f"{account['username']} 运行过程中发生错误: {e}")
             traceback.print_exc()
+            with status_lock:
+                thread_status[scraper_id] = f"运行过程中发生错误: {e}。线程已关闭。"
+            break  # 退出循环，结束线程
         finally:
             if driver:
                 driver.quit()
@@ -447,7 +482,15 @@ def run_scraper(account, market_type, scraper_id):
 
         # 等待一段时间后重启抓取过程，避免过于频繁的重启
         print(f"{account['username']} 准备重新启动抓取线程...")
+        with status_lock:
+            thread_status[scraper_id] = "准备重新启动抓取线程..."
         time.sleep(5)  # 可根据需要调整等待时间
+
+    # 清理线程控制事件和状态
+    with status_lock:
+        del thread_control_events[scraper_id]
+        del thread_status[scraper_id]
+
 
 @app.route('/start_scraper', methods=['POST'])
 def start_scraper():
@@ -474,6 +517,10 @@ def start_scraper():
     # 生成唯一的 scraper_id
     scraper_id = f"{username}_{market_type}_{int(time.time())}"
 
+    # 初始化线程状态
+    with status_lock:
+        thread_status[scraper_id] = "正在启动..."
+
     # 启动新的抓取线程
     scraper_thread = threading.Thread(target=run_scraper, args=(account, market_type, scraper_id), daemon=True)
     scraper_thread.start()
@@ -482,6 +529,7 @@ def start_scraper():
     active_threads.append(scraper_thread)
 
     return jsonify({'status': 'success', 'message': f"已启动抓取线程: {username} - {market_type}", 'scraper_id': scraper_id}), 200
+
 
 @app.route('/stop_scraper', methods=['POST'])
 def stop_scraper():
@@ -507,12 +555,14 @@ def get_status():
     获取当前活跃的抓取线程状态。
     """
     statuses = []
-    for scraper_id, event in thread_control_events.items():
-        statuses.append({
-            'scraper_id': scraper_id,
-            'is_alive': not event.is_set()
-        })
+    with status_lock:
+        for scraper_id, status in thread_status.items():
+            statuses.append({
+                'scraper_id': scraper_id,
+                'status': status
+            })
     return jsonify({'status': 'success', 'active_threads': statuses}), 200
+
 
 if __name__ == "__main__":
     # 定义登录页面的URL
