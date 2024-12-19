@@ -1,3 +1,9 @@
-league,match_time,home_team,away_team,home_score,away_score,home_corners,away_corners,SPREAD_FT_+0/0.5_AwayOdds,SPREAD_FT_-0/0.5_HomeOdds,SPREAD_FT_0_AwayOdds,SPREAD_FT_0_HomeOdds,TOTAL_POINTS_FT_2.5/3_OverOdds,TOTAL_POINTS_FT_2.5/3_UnderOdds,TOTAL_POINTS_FT_2.5_OverOdds,TOTAL_POINTS_FT_2.5_UnderOdds
-Costa Rica Primera Division - PlayOff,2H83:52,Deportivo Saprissa,CS Herediano,2,0,,,0.53,-0.69,-0.52,0.36,-0.52,0.34,-0.84,0.66
-*LEAGUE*,Unknown Time,Unknown,Unknown,0,0,,,,,,,,,,
+league,match_time,home_team,away_team,home_score,away_score,home_corners,away_corners,SPREAD_FT_+0.5_AwayOdds,SPREAD_FT_+0.5_HomeOdds,SPREAD_FT_+0/0.5_AwayOdds,SPREAD_FT_+0/0.5_HomeOdds,SPREAD_FT_+1.5/2_HomeOdds,SPREAD_FT_+1.5_HomeOdds,SPREAD_FT_-0.5_AwayOdds,SPREAD_FT_-0.5_HomeOdds,SPREAD_FT_-0/0.5_AwayOdds,SPREAD_FT_-0/0.5_HomeOdds,SPREAD_FT_-1.5/2_AwayOdds,SPREAD_FT_-1.5_AwayOdds,SPREAD_FT_0_AwayOdds,SPREAD_FT_0_HomeOdds,TOTAL_POINTS_FT_1.5/2_OverOdds,TOTAL_POINTS_FT_1.5/2_UnderOdds,TOTAL_POINTS_FT_2.5/3_OverOdds,TOTAL_POINTS_FT_2.5/3_UnderOdds,TOTAL_POINTS_FT_2.5_OverOdds,TOTAL_POINTS_FT_2.5_UnderOdds,TOTAL_POINTS_FT_2/2.5_OverOdds,TOTAL_POINTS_FT_2/2.5_UnderOdds,TOTAL_POINTS_FT_2_OverOdds,TOTAL_POINTS_FT_2_UnderOdds,TOTAL_POINTS_FT_5.5_OverOdds,TOTAL_POINTS_FT_5.5_UnderOdds,TOTAL_POINTS_FT_5/5.5_OverOdds,TOTAL_POINTS_FT_5/5.5_UnderOdds
+Turkey Cup,1H33:00,Iskenderunspor,Hatayspor,0,0,,,,0.73,,1.00,,,-0.89,,0.84,,,,,,0.67,-0.85,,,,,,,0.93,0.89,,,,
+Indonesia Liga 2,2H95:09,PSMS Medan,Dejan,1,1,,,,,0.20,,,,,,,-0.36,,,-0.40,0.24,,,-0.23,0.05,-0.31,0.13,,,,,,,,
+Azerbaijan Premier League,1H34:45,Shamakhi,Qarabag,0,0,,,,,,,0.71,0.95,,,,,-0.85,0.91,,,,,,,,,-0.97,0.81,0.67,-0.83,,,,
+Italy Campionato Primavera 1 U20,1H33:02,Juventus U20,Cagliari U20,0,0,,,0.69,,0.95,,,,,-0.85,,0.89,,,,,0.82,1.00,,,,,,,-0.88,0.70,,,,
+Malaysia MFL Cup U23,2H84:31,Negeri Sembilan U23,Sri Pahang U23,1,1,,,,,,0.23,,,,,-0.51,,,,0.66,-0.94,,,-0.44,0.16,-0.60,0.32,,,,,,,,
+EFootball - GT Sports League (2 X 6mins),1H04:14,Borussia Dortmund (Pele) Esports,Eintracht Frankfurt (Chemist) Esports,1,0,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+EFootball - GT Sports League (2 X 6mins),1H04:16,PSV Eindhoven (Goliath) Esports,Girona (Ivan) Esports,1,1,,,0.69,,0.87,,,,,-0.97,,0.85,,,,,,,,,,,,,,,0.94,0.78,0.74,0.98
+*LEAGUE*,Unknown Time,Unknown,Unknown,0,0,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,

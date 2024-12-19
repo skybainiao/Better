@@ -419,101 +419,84 @@ def run_scraper(account, market_type, scraper_id):
     stop_event = threading.Event()
     thread_control_events[scraper_id] = stop_event
 
-    while not stop_event.is_set():
-        driver = None
-        try:
-            driver = init_driver()
-            with status_lock:
-                thread_status[scraper_id] = "尝试登录..."
-                print(f"Scraper ID {scraper_id} 状态更新为: 尝试登录...")
+    try:
+        driver = init_driver()
+        with status_lock:
+            thread_status[scraper_id] = "启动中"  # 设置为“启动中”（黄色）
+            print(f"Scraper ID {scraper_id} 状态更新为: 启动中")
 
-            if login(driver, account['username']):
-                with status_lock:
-                    thread_status[scraper_id] = "登录成功，导航到足球页面..."
-                    print(f"Scraper ID {scraper_id} 状态更新为: 登录成功，导航到足球页面...")
+        if login(driver, account['username']):
+            if navigate_to_football(driver):
+                try:
+                    # 点击指定的市场类型按钮
+                    button = WebDriverWait(driver, 10).until(
+                        EC.element_to_be_clickable((By.ID, MARKET_TYPES[market_type]))
+                    )
+                    button.click()
+                    print(f"{account['username']} 已点击 {market_type} 按钮")
 
-                if navigate_to_football(driver):
                     with status_lock:
-                        thread_status[scraper_id] = "导航到足球页面成功，尝试点击市场类型按钮..."
-                        print(f"Scraper ID {scraper_id} 状态更新为: 导航到足球页面成功，尝试点击市场类型按钮...")
+                        thread_status[scraper_id] = "运行中"  # 设置为“运行中”（绿色）
+                        print(f"Scraper ID {scraper_id} 状态更新为: 运行中")
 
-                    try:
-                        # 点击指定的市场类型按钮
-                        button = WebDriverWait(driver, 10).until(
-                            EC.element_to_be_clickable((By.ID, MARKET_TYPES[market_type]))
-                        )
-                        button.click()
-                        print(f"{account['username']} 已点击 {market_type} 按钮")
+                    # 等待页面加载
+                    time.sleep(5)
 
-                        with status_lock:
-                            thread_status[scraper_id] = "运行中"
-                            print(f"Scraper ID {scraper_id} 状态更新为: 运行中")
+                    # 启动发送CSV数据到服务器的线程
+                    server_url = "http://yourserver.com/api/data"  # 替换为实际的服务器URL
+                    info = f"{account['username']} - {market_type}"
+                    sender_thread = threading.Thread(target=send_csv_as_json, args=(filename, server_url, interval, info), daemon=True)
+                    sender_thread.start()
+                    print(f"已启动数据发送线程: {info}")
 
-                        # 等待页面加载
-                        time.sleep(5)
-
-                        # 启动发送CSV数据到服务器的线程
-                        server_url = "http://yourserver.com/api/data"  # 替换为实际的服务器URL
-                        info = f"{account['username']} - {market_type}"
-                        sender_thread = threading.Thread(target=send_csv_as_json, args=(filename, server_url, interval, info), daemon=True)
-                        sender_thread.start()
-                        print(f"已启动数据发送线程: {info}")
-
-                        # 进入数据抓取循环
-                        while not stop_event.is_set():
-                            try:
-                                soup = get_market_data(driver)
-                                if soup:
-                                    data = parse_market_data(soup, market_type)
-                                    save_to_csv(data, filename)
-                                    #print(f"{account['username']} 成功获取并保存数据")
-                                else:
-                                    print(f"{account['username']} 未获取到数据")
-                            except Exception as e:
-                                print(f"{account['username']} 抓取数据时发生错误: {e}")
-                                traceback.print_exc()
-                            time.sleep(interval)
-                    except Exception as e:
-                        print(f"{account['username']} 未找到市场类型按钮: {market_type}")
-                        traceback.print_exc()
-                        with status_lock:
-                            thread_status[scraper_id] = f"未找到市场类型按钮: {market_type}。线程已关闭。"
-                            print(f"Scraper ID {scraper_id} 状态更新为: 未找到市场类型按钮: {market_type}。线程已关闭。")
-                        break  # 退出循环，结束线程
-                else:
+                    # 进入数据抓取循环
+                    while not stop_event.is_set():
+                        try:
+                            soup = get_market_data(driver)
+                            if soup:
+                                data = parse_market_data(soup, market_type)
+                                save_to_csv(data, filename)
+                            else:
+                                print(f"{account['username']} 未获取到数据")
+                        except Exception as e:
+                            print(f"{account['username']} 抓取数据时发生错误: {e}")
+                            traceback.print_exc()
+                        time.sleep(interval)
+                except Exception as e:
+                    print(f"{account['username']} 未找到市场类型按钮: {market_type}")
+                    traceback.print_exc()
                     with status_lock:
-                        thread_status[scraper_id] = "未找到足球页面。线程已关闭。"
-                        print(f"Scraper ID {scraper_id} 状态更新为: 未找到足球页面。线程已关闭。")
-                    break  # 退出循环，结束线程
+                        thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
+                        print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
             else:
                 with status_lock:
-                    thread_status[scraper_id] = "登录失败。线程已关闭。"
-                    print(f"Scraper ID {scraper_id} 状态更新为: 登录失败。线程已关闭。")
-                break  # 退出循环，结束线程
-        except Exception as e:
-            print(f"{account['username']} 运行过程中发生错误: {e}")
-            traceback.print_exc()
+                    thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
+                    print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
+        else:
             with status_lock:
-                thread_status[scraper_id] = f"运行过程中发生错误: {e}。线程已关闭。"
-                print(f"Scraper ID {scraper_id} 状态更新为: 运行过程中发生错误: {e}。线程已关闭。")
-            break  # 退出循环，结束线程
-        finally:
-            if driver:
-                driver.quit()
-                print(f"{account['username']} 已关闭浏览器")
-
-        # 等待一段时间后重启抓取过程，避免过于频繁的重启
-        print(f"{account['username']} 准备重新启动抓取线程...")
+                thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
+                print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
+    except Exception as e:
+        print(f"{account['username']} 运行过程中发生错误: {e}")
+        traceback.print_exc()
         with status_lock:
-            thread_status[scraper_id] = "准备重新启动抓取线程..."
-            print(f"Scraper ID {scraper_id} 状态更新为: 准备重新启动抓取线程...")
-        time.sleep(5)  # 可根据需要调整等待时间
+            thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
+            print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
+    finally:
+        if driver:
+            driver.quit()
+            print(f"{account['username']} 已关闭浏览器")
 
-    # 保留 thread_status，即不删除状态
-    # 移除或注释掉以下代码
-    # with status_lock:
-    #     del thread_control_events[scraper_id]
-    #     del thread_status[scraper_id]
+        # 从控制事件中移除 scraper_id
+        with status_lock:
+            if scraper_id in thread_control_events:
+                del thread_control_events[scraper_id]
+            # 不再在这里删除 thread_status[scraper_id]
+
+
+
+
+
 
 
 
@@ -572,12 +555,64 @@ def stop_scraper():
         return jsonify({'status': 'error', 'message': '缺少 scraper_id'}), 400
 
     scraper_id = data['scraper_id']
+    with status_lock:
+        # 检查 scraper_id 是否存在
+        if scraper_id not in thread_status:
+            return jsonify({'status': 'error', 'message': f"未找到 scraper_id: {scraper_id}"}), 404
+
+    # 如果 scraper_id 在 thread_control_events 中，先停止线程
     if scraper_id in thread_control_events:
         thread_control_events[scraper_id].set()
-        del thread_control_events[scraper_id]
-        return jsonify({'status': 'success', 'message': f"已停止抓取线程: {scraper_id}"}), 200
+        with status_lock:
+            del thread_control_events[scraper_id]
+        print(f"Scraper ID {scraper_id} 已被停止。")
     else:
-        return jsonify({'status': 'error', 'message': f"未找到 scraper_id: {scraper_id}"}), 404
+        print(f"Scraper ID {scraper_id} 未启动线程。")
+
+    # 将状态设置为“已停止”
+    with status_lock:
+        thread_status[scraper_id] = "已停止"
+        print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
+
+    return jsonify({'status': 'success', 'message': f"已停止抓取线程: {scraper_id}"}), 200
+
+
+
+@app.route('/delete_scraper', methods=['POST'])
+def delete_scraper():
+    """
+    删除指定的抓取线程。
+    请求体应包含 'scraper_id'。
+    """
+    data = request.json
+    if 'scraper_id' not in data:
+        return jsonify({'status': 'error', 'message': '缺少 scraper_id'}), 400
+
+    scraper_id = data['scraper_id']
+    with status_lock:
+        # 检查 scraper_id 是否存在
+        if scraper_id not in thread_status:
+            return jsonify({'status': 'error', 'message': f"未找到 scraper_id: {scraper_id}"}), 404
+
+    # 如果 scraper_id 在 thread_control_events 中，先停止线程
+    if scraper_id in thread_control_events:
+        thread_control_events[scraper_id].set()
+        with status_lock:
+            del thread_control_events[scraper_id]
+        print(f"Scraper ID {scraper_id} 已被停止。")
+    else:
+        print(f"Scraper ID {scraper_id} 未启动线程。")
+
+    # 将状态设置为“已停止”而不是删除 scraper_id
+    with status_lock:
+        thread_status[scraper_id] = "已停止"
+        print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
+
+    return jsonify({'status': 'success', 'message': f"已删除抓取线程: {scraper_id}"}), 200
+
+
+
+
 
 
 @app.route('/get_status', methods=['GET'])
