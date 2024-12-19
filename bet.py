@@ -25,7 +25,7 @@ FIXED_PASSWORD = 'dddd1111DD'
 # 定义要抓取的市场类型及其对应的按钮ID
 MARKET_TYPES = {
     'HDP_OU': 'tab_rnou',  # 让球盘/大小球的按钮ID
-    'CORNERS': 'tab_cn'    # 角球的按钮ID
+    'CORNERS': 'tab_cn'  # 角球的按钮ID
 }
 
 # 创建Flask应用
@@ -34,6 +34,7 @@ app = Flask(__name__)
 # 用于跟踪活跃的抓取线程
 active_threads = []
 thread_control_events = {}
+
 
 def init_driver():
     chrome_options = Options()
@@ -55,6 +56,7 @@ def init_driver():
         '''
     })
     return driver
+
 
 def login(driver, username):
     driver.get(BASE_URL)
@@ -90,6 +92,7 @@ def login(driver, username):
         traceback.print_exc()
         return False
 
+
 def navigate_to_football(driver):
     wait = WebDriverWait(driver, 30)
     try:
@@ -106,6 +109,7 @@ def navigate_to_football(driver):
         traceback.print_exc()
         return False
 
+
 def get_market_data(driver):
     try:
         page_source = driver.page_source
@@ -115,6 +119,7 @@ def get_market_data(driver):
         print(f"获取页面数据失败: {e}")
         traceback.print_exc()
         return None
+
 
 def parse_market_data(soup, market_type):
     data = []
@@ -130,6 +135,7 @@ def parse_market_data(soup, market_type):
                 data.append(match_info)
             match_container = match_container.find_next_sibling()
     return data
+
 
 def extract_match_info(match_container, league_name, market_type):
     try:
@@ -178,7 +184,7 @@ def extract_match_info(match_container, league_name, market_type):
             'home_score': home_score,
             'away_score': away_score,
             'home_corners': '',  # 预留字段
-            'away_corners': ''   # 预留字段
+            'away_corners': ''  # 预留字段
         }
 
         # 提取赔率信息
@@ -214,6 +220,7 @@ def extract_match_info(match_container, league_name, market_type):
         print(f"提取比赛信息失败: {e}")
         traceback.print_exc()
         return None
+
 
 def extract_odds_hdp_ou(odds_section, bet_type, time_indicator):
     odds = {}
@@ -264,6 +271,7 @@ def extract_odds_hdp_ou(odds_section, bet_type, time_indicator):
                 continue
             odds[key_away] = odds_value
     return odds
+
 
 def extract_odds_corners(odds_section):
     odds = {}
@@ -336,6 +344,7 @@ def extract_odds_corners(odds_section):
 
     return odds
 
+
 def save_to_csv(data, filename):
     if not data:
         print(f"没有数据保存到 {filename}")
@@ -358,6 +367,7 @@ def save_to_csv(data, filename):
             clean_row = {k: v for k, v in row.items() if k in fieldnames}
             writer.writerow(clean_row)
     #print(f"数据保存到 {filename}")
+
 
 def send_csv_as_json(csv_file_path, server_url, t, info):
     print(f"正在发送 {info} 数据...")
@@ -398,6 +408,9 @@ def send_csv_as_json(csv_file_path, server_url, t, info):
     except Exception as e:
         print(f"发送数据时发生错误: {e}")
 
+
+# 删除所有除了以下唯一定义之外的 run_scraper 函数
+
 def run_scraper(account, market_type, scraper_id):
     # 设置默认值
     filename = f"{account['username']}_{market_type}_data.csv"
@@ -412,14 +425,17 @@ def run_scraper(account, market_type, scraper_id):
             driver = init_driver()
             with status_lock:
                 thread_status[scraper_id] = "尝试登录..."
+                print(f"Scraper ID {scraper_id} 状态更新为: 尝试登录...")
 
             if login(driver, account['username']):
                 with status_lock:
                     thread_status[scraper_id] = "登录成功，导航到足球页面..."
+                    print(f"Scraper ID {scraper_id} 状态更新为: 登录成功，导航到足球页面...")
 
                 if navigate_to_football(driver):
                     with status_lock:
                         thread_status[scraper_id] = "导航到足球页面成功，尝试点击市场类型按钮..."
+                        print(f"Scraper ID {scraper_id} 状态更新为: 导航到足球页面成功，尝试点击市场类型按钮...")
 
                     try:
                         # 点击指定的市场类型按钮
@@ -430,7 +446,8 @@ def run_scraper(account, market_type, scraper_id):
                         print(f"{account['username']} 已点击 {market_type} 按钮")
 
                         with status_lock:
-                            thread_status[scraper_id] = f"已点击 {market_type} 按钮，开始抓取数据..."
+                            thread_status[scraper_id] = "运行中"
+                            print(f"Scraper ID {scraper_id} 状态更新为: 运行中")
 
                         # 等待页面加载
                         time.sleep(5)
@@ -440,6 +457,7 @@ def run_scraper(account, market_type, scraper_id):
                         info = f"{account['username']} - {market_type}"
                         sender_thread = threading.Thread(target=send_csv_as_json, args=(filename, server_url, interval, info), daemon=True)
                         sender_thread.start()
+                        print(f"已启动数据发送线程: {info}")
 
                         # 进入数据抓取循环
                         while not stop_event.is_set():
@@ -460,20 +478,24 @@ def run_scraper(account, market_type, scraper_id):
                         traceback.print_exc()
                         with status_lock:
                             thread_status[scraper_id] = f"未找到市场类型按钮: {market_type}。线程已关闭。"
+                            print(f"Scraper ID {scraper_id} 状态更新为: 未找到市场类型按钮: {market_type}。线程已关闭。")
                         break  # 退出循环，结束线程
                 else:
                     with status_lock:
                         thread_status[scraper_id] = "未找到足球页面。线程已关闭。"
+                        print(f"Scraper ID {scraper_id} 状态更新为: 未找到足球页面。线程已关闭。")
                     break  # 退出循环，结束线程
             else:
                 with status_lock:
                     thread_status[scraper_id] = "登录失败。线程已关闭。"
+                    print(f"Scraper ID {scraper_id} 状态更新为: 登录失败。线程已关闭。")
                 break  # 退出循环，结束线程
         except Exception as e:
             print(f"{account['username']} 运行过程中发生错误: {e}")
             traceback.print_exc()
             with status_lock:
                 thread_status[scraper_id] = f"运行过程中发生错误: {e}。线程已关闭。"
+                print(f"Scraper ID {scraper_id} 状态更新为: 运行过程中发生错误: {e}。线程已关闭。")
             break  # 退出循环，结束线程
         finally:
             if driver:
@@ -484,12 +506,17 @@ def run_scraper(account, market_type, scraper_id):
         print(f"{account['username']} 准备重新启动抓取线程...")
         with status_lock:
             thread_status[scraper_id] = "准备重新启动抓取线程..."
+            print(f"Scraper ID {scraper_id} 状态更新为: 准备重新启动抓取线程...")
         time.sleep(5)  # 可根据需要调整等待时间
 
-    # 清理线程控制事件和状态
-    with status_lock:
-        del thread_control_events[scraper_id]
-        del thread_status[scraper_id]
+    # 保留 thread_status，即不删除状态
+    # 移除或注释掉以下代码
+    # with status_lock:
+    #     del thread_control_events[scraper_id]
+    #     del thread_status[scraper_id]
+
+
+
 
 
 @app.route('/start_scraper', methods=['POST'])
@@ -520,6 +547,7 @@ def start_scraper():
     # 初始化线程状态
     with status_lock:
         thread_status[scraper_id] = "正在启动..."
+        print(f"Scraper ID {scraper_id} 状态更新为: 正在启动...")
 
     # 启动新的抓取线程
     scraper_thread = threading.Thread(target=run_scraper, args=(account, market_type, scraper_id), daemon=True)
@@ -528,7 +556,9 @@ def start_scraper():
     # 将线程添加到活跃线程列表
     active_threads.append(scraper_thread)
 
-    return jsonify({'status': 'success', 'message': f"已启动抓取线程: {username} - {market_type}", 'scraper_id': scraper_id}), 200
+    return jsonify(
+        {'status': 'success', 'message': f"已启动抓取线程: {username} - {market_type}", 'scraper_id': scraper_id}), 200
+
 
 
 @app.route('/stop_scraper', methods=['POST'])
@@ -549,6 +579,7 @@ def stop_scraper():
     else:
         return jsonify({'status': 'error', 'message': f"未找到 scraper_id: {scraper_id}"}), 404
 
+
 @app.route('/get_status', methods=['GET'])
 def get_status():
     """
@@ -562,6 +593,7 @@ def get_status():
                 'status': status
             })
     return jsonify({'status': 'success', 'active_threads': statuses}), 200
+
 
 
 if __name__ == "__main__":

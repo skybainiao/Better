@@ -1,14 +1,3 @@
-league,match_time,home_team,away_team,home_score,away_score,home_corners,away_corners,SPREAD_FT_+0.5/1_AwayOdds,SPREAD_FT_+0.5/1_HomeOdds,SPREAD_FT_+0.5_HomeOdds,SPREAD_FT_+0/0.5_AwayOdds,SPREAD_FT_+0/0.5_HomeOdds,SPREAD_FT_+1.5_AwayOdds,SPREAD_FT_+1_AwayOdds,SPREAD_FT_+1_HomeOdds,SPREAD_FT_-0.5/1_AwayOdds,SPREAD_FT_-0.5/1_HomeOdds,SPREAD_FT_-0.5_AwayOdds,SPREAD_FT_-0/0.5_AwayOdds,SPREAD_FT_-0/0.5_HomeOdds,SPREAD_FT_-1.5_HomeOdds,SPREAD_FT_-1_AwayOdds,SPREAD_FT_-1_HomeOdds,SPREAD_FT_0_AwayOdds,SPREAD_FT_0_HomeOdds,TOTAL_POINTS_FT_1.5/2_OverOdds,TOTAL_POINTS_FT_1.5/2_UnderOdds,TOTAL_POINTS_FT_2.5/3_OverOdds,TOTAL_POINTS_FT_2.5/3_UnderOdds,TOTAL_POINTS_FT_2.5_OverOdds,TOTAL_POINTS_FT_2.5_UnderOdds,TOTAL_POINTS_FT_2/2.5_OverOdds,TOTAL_POINTS_FT_2/2.5_UnderOdds,TOTAL_POINTS_FT_2_OverOdds,TOTAL_POINTS_FT_2_UnderOdds,TOTAL_POINTS_FT_3.5/4_OverOdds,TOTAL_POINTS_FT_3.5/4_UnderOdds,TOTAL_POINTS_FT_3.5_OverOdds,TOTAL_POINTS_FT_3.5_UnderOdds,TOTAL_POINTS_FT_3/3.5_OverOdds,TOTAL_POINTS_FT_3/3.5_UnderOdds,TOTAL_POINTS_FT_4.5_OverOdds,TOTAL_POINTS_FT_4.5_UnderOdds,TOTAL_POINTS_FT_4/4.5_OverOdds,TOTAL_POINTS_FT_4/4.5_UnderOdds
-Turkey Cup,1H03:33,Esenler Erokspor,Istanbulspor,0,0,,,,,,,0.70,,,,,,,-0.92,,,,,0.81,0.97,,,,,0.91,0.87,0.68,-0.90,,,,,,,,,,,,
-Turkey Cup,1H03:20,Kastamonuspor,Bodrumspor,0,0,,,,-0.94,,,,,,0.79,0.72,,,,,,0.99,,,,,,,,0.91,0.87,0.68,-0.90,,,,,,,,,,,,
-Turkey Cup,1H02:53,Corluspor 1947,Kocaelispor,1,0,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
-Turkey Cup,1H03:21,Boluspor,1461 Trabzon,0,0,,,,,,,,-0.74,,,,,,,,0.46,,,,,,,,,,,,,,,,,,,0.51,-0.79,,,,
-Turkey Cup,1H03:33,Ankara Keciorengucu,Sivasspor,1,0,,,,0.97,,,,,,0.70,0.81,,,,,,-0.92,,,,,,,,,,,,,,0.96,0.82,0.75,-0.97,,,,,,
-Kenya Premier League,1H04:25,Talanta,Kenya Police,0,0,,,,0.71,0.97,,,,,,-0.93,,0.81,,,,,,,,,,,,,,-0.93,0.71,0.80,0.98,,,,,,,,,,
-India Delhi Premier League,HT,Friends United,CISF Protectors,0,2,,,,0.91,,,,,,,0.81,,,,,,,,,,,,,,,,,,,,,,,,,,0.66,-0.94,,
-Italy Campionato Primavera 1 U20,1H29:56,Lecce U20,Torino U20,0,0,,,,,,0.78,,,,,,,,,-0.94,,,,-0.85,0.69,0.80,-0.98,,,,,,,-0.89,0.71,,,,,,,,,,
-Japan Women Empowerment Professional Football League,1H29:25,Sanfrecce Hiroshima Regina (W),Omiya Ardija Ventus (W),1,0,,,-0.93,,,,,,0.72,,,0.77,,,,,,-0.88,,,,,-0.96,0.78,0.78,-0.96,,,,,,,,,,,,,,
-EFootball - FIFA Adriatic League (2 X 5mins),1H02:47,Manchester City (Joshua) Esports,Bayern Munich (Bruno) Esports,1,0,,,,,,0.82,,,,,,,,,0.90,,,,-0.95,0.67,,,,,,,,,,,,,,,,,0.97,0.75,0.86,0.86
-EFootball - GT Sports League (2 X 6mins),LIVE,Atalanta (Zangief) Esports,RB Leipzig (Sergio) Esports,0,0,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
-EFootball - GT Sports League (2 X 6mins),1H02:27,Club Brugge (Madisson) Esports,Girona (Ivan) Esports,1,0,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
-*LEAGUE*,Unknown Time,Unknown,Unknown,0,0,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+league,match_time,home_team,away_team,home_score,away_score,home_corners,away_corners,SPREAD_FT_+0/0.5_AwayOdds,SPREAD_FT_-0/0.5_HomeOdds,SPREAD_FT_0_AwayOdds,SPREAD_FT_0_HomeOdds,TOTAL_POINTS_FT_2.5/3_OverOdds,TOTAL_POINTS_FT_2.5/3_UnderOdds,TOTAL_POINTS_FT_2.5_OverOdds,TOTAL_POINTS_FT_2.5_UnderOdds
+Costa Rica Primera Division - PlayOff,2H83:52,Deportivo Saprissa,CS Herediano,2,0,,,0.53,-0.69,-0.52,0.36,-0.52,0.34,-0.84,0.66
+*LEAGUE*,Unknown Time,Unknown,Unknown,0,0,,,,,,,,,,
