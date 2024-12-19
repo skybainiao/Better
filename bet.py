@@ -1,9 +1,11 @@
-# bet.py
 import json
+import os
 import threading
+import zipfile
+
 import pandas as pd
 import requests
-from selenium import webdriver
+from seleniumwire import webdriver  # 使用 seleniumwire 的 webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
@@ -13,7 +15,10 @@ import time
 import csv
 import traceback
 from flask import Flask, request, jsonify
-import threading
+from urllib.parse import urlparse
+import random
+import warnings
+from urllib3.exceptions import InsecureRequestWarning
 
 # 用于跟踪抓取线程状态
 thread_status = {}
@@ -35,10 +40,53 @@ app = Flask(__name__)
 active_threads = []
 thread_control_events = {}
 
+# 忽略 InsecureRequestWarning（可选）
+warnings.simplefilter('ignore', InsecureRequestWarning)
 
-def init_driver():
+# 定义IP池，每个代理格式为 "protocol://username:password@host:port"
+IP_POOL = [
+    "http://user-spz4nq4hh5-ip-122.8.88.216:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10001",
+    "http://user-spz4nq4hh5-ip-122.8.86.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10002",
+    "http://user-spz4nq4hh5-ip-122.8.15.166:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10003",
+    "http://user-spz4nq4hh5-ip-122.8.87.234:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10004",
+    "http://user-spz4nq4hh5-ip-122.8.16.212:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10005",
+    "http://user-spz4nq4hh5-ip-122.8.83.60:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10006",
+    "http://user-spz4nq4hh5-ip-122.8.83.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10007",
+    "http://user-spz4nq4hh5-ip-122.8.87.216:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10008",
+    "http://user-spz4nq4hh5-ip-122.8.87.251:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10009",
+    "http://user-spz4nq4hh5-ip-122.8.16.227:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10010"
+]
+
+
+def get_random_proxy():
+    return random.choice(IP_POOL)
+
+
+def init_driver(proxy=None):
+    seleniumwire_options = {}
+
+    if proxy:
+        # 解析代理URL
+        parsed = urlparse(proxy)
+        proxy_host = parsed.hostname
+        proxy_port = parsed.port
+        proxy_username = parsed.username
+        proxy_password = parsed.password
+
+        scheme = parsed.scheme.lower()
+        if scheme not in ['http', 'https', 'socks5']:
+            raise ValueError(f"Unsupported proxy scheme: {scheme}")
+
+        seleniumwire_options['proxy'] = {
+            scheme: f"{scheme}://{proxy_username}:{proxy_password}@{proxy_host}:{proxy_port}",
+            'no_proxy': 'localhost,127.0.0.1'
+        }
+
+        print(f"Configured {scheme.upper()} proxy: {proxy_username}@{proxy_host}:{proxy_port}")
+
     chrome_options = Options()
-    #chrome_options.add_argument('--headless')  # 无头模式（不显示浏览器界面）
+    # 如果需要无头模式，可以取消注释以下行
+    # chrome_options.add_argument('--headless')
     chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--ignore-certificate-errors')
@@ -46,8 +94,14 @@ def init_driver():
     chrome_options.add_argument('--disable-extensions')
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
-    driver = webdriver.Chrome(options=chrome_options)
-    # 隐藏webdriver属性，防止被网站检测到自动化工具
+
+    try:
+        driver = webdriver.Chrome(options=chrome_options, seleniumwire_options=seleniumwire_options)
+    except Exception as e:
+        print(f"Error initializing Chrome WebDriver: {e}")
+        raise e
+
+    # 隐藏 webdriver 属性，防止被网站检测到自动化工具
     driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
         'source': '''
             Object.defineProperty(navigator, 'webdriver', {
@@ -369,85 +423,42 @@ def save_to_csv(data, filename):
     #print(f"数据保存到 {filename}")
 
 
-def send_csv_as_json(csv_file_path, server_url, t, info):
-    print(f"正在发送 {info} 数据...")
-    try:
-        # 循环发送数据
-        while True:
-            try:
-                # 读取 CSV 文件
-                data = pd.read_csv(csv_file_path)
-
-                # 用空字符串替换 NaN 或 inf 值
-                data = data.fillna("")  # 替换 NaN
-                data = data.replace([float('inf'), float('-inf')], "")  # 替换 inf 和 -inf
-
-                # 将数据转换为 JSON 格式
-                json_data = data.to_dict(orient='records')
-
-                # 发送数据
-                headers = {'Content-Type': 'application/json'}
-                response = requests.post(server_url, json=json_data, headers=headers)
-
-                # 检查服务器响应
-                if response.status_code == 200:
-                    #print(f"{info} 数据成功发送到服务器: {server_url}")
-                    pass
-                else:
-                    print(f"{info} 发送失败，状态码: {response.status_code}, 响应: {response.text}")
-
-            except FileNotFoundError:
-                print(f"文件未找到: {csv_file_path}")
-            except Exception as e:
-                #print(f"处理 CSV 文件时发生错误: {e}")
-                pass
-
-            # 等待指定时间间隔
-            time.sleep(t)
-
-    except Exception as e:
-        print(f"发送数据时发生错误: {e}")
-
-
-# 删除所有除了以下唯一定义之外的 run_scraper 函数
-
-def run_scraper(account, market_type, scraper_id):
+def run_scraper(account, market_type, scraper_id, proxy):
     # 设置默认值
-    filename = f"{account['username']}_{market_type}_data.csv"
+    username = account['username']
+    filename = f"{username}_{market_type}_data.csv"
     interval = 0.3  # 默认抓取间隔（秒）
 
     stop_event = threading.Event()
     thread_control_events[scraper_id] = stop_event
 
+    driver = None  # 初始化 driver
+
     try:
-        driver = init_driver()
+        driver = init_driver(proxy)
+        # 等待代理配置生效
+        time.sleep(2)  # 根据需要调整时间
+
         with status_lock:
             thread_status[scraper_id] = "启动中"  # 设置为“启动中”（黄色）
-            print(f"Scraper ID {scraper_id} 状态更新为: 启动中")
+            print(f"Scraper ID {scraper_id} 状态更新为: 启动中 使用代理: {proxy}")
 
-        if login(driver, account['username']):
+        if login(driver, username):
             if navigate_to_football(driver):
+                with status_lock:
+                    thread_status[scraper_id] = "运行中"  # 设置为“运行中”（绿色）
+                    print(f"Scraper ID {scraper_id} 状态更新为: 运行中 使用代理: {proxy}")
+
                 try:
                     # 点击指定的市场类型按钮
                     button = WebDriverWait(driver, 10).until(
                         EC.element_to_be_clickable((By.ID, MARKET_TYPES[market_type]))
                     )
                     button.click()
-                    print(f"{account['username']} 已点击 {market_type} 按钮")
-
-                    with status_lock:
-                        thread_status[scraper_id] = "运行中"  # 设置为“运行中”（绿色）
-                        print(f"Scraper ID {scraper_id} 状态更新为: 运行中")
+                    print(f"{username} 已点击 {market_type} 按钮 使用代理: {proxy}")
 
                     # 等待页面加载
                     time.sleep(5)
-
-                    # 启动发送CSV数据到服务器的线程
-                    server_url = "http://yourserver.com/api/data"  # 替换为实际的服务器URL
-                    info = f"{account['username']} - {market_type}"
-                    sender_thread = threading.Thread(target=send_csv_as_json, args=(filename, server_url, interval, info), daemon=True)
-                    sender_thread.start()
-                    print(f"已启动数据发送线程: {info}")
 
                     # 进入数据抓取循环
                     while not stop_event.is_set():
@@ -457,48 +468,41 @@ def run_scraper(account, market_type, scraper_id):
                                 data = parse_market_data(soup, market_type)
                                 save_to_csv(data, filename)
                             else:
-                                print(f"{account['username']} 未获取到数据")
+                                print(f"{username} 未获取到数据 使用代理: {proxy}")
                         except Exception as e:
-                            print(f"{account['username']} 抓取数据时发生错误: {e}")
+                            print(f"{username} 抓取数据时发生错误: {e} 使用代理: {proxy}")
                             traceback.print_exc()
                         time.sleep(interval)
                 except Exception as e:
-                    print(f"{account['username']} 未找到市场类型按钮: {market_type}")
+                    print(f"{username} 未找到市场类型按钮: {market_type} 使用代理: {proxy}")
                     traceback.print_exc()
                     with status_lock:
                         thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
-                        print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
+                        print(f"Scraper ID {scraper_id} 状态更新为: 已停止。 使用代理: {proxy}")
             else:
                 with status_lock:
                     thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
-                    print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
+                    print(f"Scraper ID {scraper_id} 状态更新为: 已停止。 使用代理: {proxy}")
         else:
             with status_lock:
                 thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
-                print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
+                print(f"Scraper ID {scraper_id} 状态更新为: 已停止。 使用代理: {proxy}")
     except Exception as e:
-        print(f"{account['username']} 运行过程中发生错误: {e}")
+        print(f"{username} 运行过程中发生错误: {e} 使用代理: {proxy}")
         traceback.print_exc()
         with status_lock:
             thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
-            print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
+            print(f"Scraper ID {scraper_id} 状态更新为: 已停止。 使用代理: {proxy}")
     finally:
         if driver:
             driver.quit()
-            print(f"{account['username']} 已关闭浏览器")
+            print(f"{username} 已关闭浏览器 使用代理: {proxy}")
 
-        # 从控制事件中移除 scraper_id
+        # 从控制事件中移除 scraper_id 并保持 thread_status 直到删除
         with status_lock:
             if scraper_id in thread_control_events:
                 del thread_control_events[scraper_id]
-            # 不再在这里删除 thread_status[scraper_id]
-
-
-
-
-
-
-
+            # 保持 thread_status 直到删除
 
 
 
@@ -527,13 +531,16 @@ def start_scraper():
     # 生成唯一的 scraper_id
     scraper_id = f"{username}_{market_type}_{int(time.time())}"
 
+    # 获取一个随机代理
+    proxy = get_random_proxy()
+
     # 初始化线程状态
     with status_lock:
         thread_status[scraper_id] = "正在启动..."
-        print(f"Scraper ID {scraper_id} 状态更新为: 正在启动...")
+        print(f"Scraper ID {scraper_id} 状态更新为: 正在启动... 使用代理: {proxy}")
 
-    # 启动新的抓取线程
-    scraper_thread = threading.Thread(target=run_scraper, args=(account, market_type, scraper_id), daemon=True)
+    # 启动新的抓取线程，传递代理参数
+    scraper_thread = threading.Thread(target=run_scraper, args=(account, market_type, scraper_id, proxy), daemon=True)
     scraper_thread.start()
 
     # 将线程添加到活跃线程列表
@@ -541,7 +548,6 @@ def start_scraper():
 
     return jsonify(
         {'status': 'success', 'message': f"已启动抓取线程: {username} - {market_type}", 'scraper_id': scraper_id}), 200
-
 
 
 @app.route('/stop_scraper', methods=['POST'])
@@ -566,13 +572,12 @@ def stop_scraper():
         with status_lock:
             del thread_control_events[scraper_id]
         print(f"Scraper ID {scraper_id} 已被停止。")
+
+        with status_lock:
+            thread_status[scraper_id] = "已停止"  # 更新状态为“已停止”
+            print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
     else:
         print(f"Scraper ID {scraper_id} 未启动线程。")
-
-    # 将状态设置为“已停止”
-    with status_lock:
-        thread_status[scraper_id] = "已停止"
-        print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
 
     return jsonify({'status': 'success', 'message': f"已停止抓取线程: {scraper_id}"}), 200
 
@@ -600,17 +605,14 @@ def delete_scraper():
         with status_lock:
             del thread_control_events[scraper_id]
         print(f"Scraper ID {scraper_id} 已被停止。")
-    else:
-        print(f"Scraper ID {scraper_id} 未启动线程。")
 
-    # 将状态设置为“已停止”而不是删除 scraper_id
+    # 从 thread_status 中移除 scraper_id
     with status_lock:
-        thread_status[scraper_id] = "已停止"
-        print(f"Scraper ID {scraper_id} 状态更新为: 已停止。")
+        if scraper_id in thread_status:
+            del thread_status[scraper_id]
+            print(f"Scraper ID {scraper_id} 已从状态列表中删除。")
 
     return jsonify({'status': 'success', 'message': f"已删除抓取线程: {scraper_id}"}), 200
-
-
 
 
 
@@ -628,7 +630,6 @@ def get_status():
                 'status': status
             })
     return jsonify({'status': 'success', 'active_threads': statuses}), 200
-
 
 
 if __name__ == "__main__":
