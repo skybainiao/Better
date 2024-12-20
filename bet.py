@@ -1,8 +1,8 @@
 import json
 import os
 import threading
-import zipfile
-
+from queue import Queue
+import random
 import pandas as pd
 import requests
 from seleniumwire import webdriver  # 使用 seleniumwire 的 webdriver
@@ -16,7 +16,6 @@ import csv
 import traceback
 from flask import Flask, request, jsonify
 from urllib.parse import urlparse
-import random
 import warnings
 from urllib3.exceptions import InsecureRequestWarning
 
@@ -44,22 +43,76 @@ thread_control_events = {}
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
 # 定义IP池，每个代理格式为 "protocol://username:password@host:port"
-IP_POOL = [
-    "http://user-spz4nq4hh5-ip-122.8.88.216:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10001",
-    "http://user-spz4nq4hh5-ip-122.8.86.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10002",
-    "http://user-spz4nq4hh5-ip-122.8.15.166:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10003",
-    "http://user-spz4nq4hh5-ip-122.8.87.234:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10004",
-    "http://user-spz4nq4hh5-ip-122.8.16.212:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10005",
-    "http://user-spz4nq4hh5-ip-122.8.83.60:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10006",
-    "http://user-spz4nq4hh5-ip-122.8.83.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10007",
-    "http://user-spz4nq4hh5-ip-122.8.87.216:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10008",
-    "http://user-spz4nq4hh5-ip-122.8.87.251:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10009",
-    "http://user-spz4nq4hh5-ip-122.8.16.227:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10010"
+IP_POOL = {
+    "http://user-spz4nq4hh5-ip-122.8.88.216:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10001": {"status": "active",
+                                                                                              "failures": 0},
+    "http://user-spz4nq4hh5-ip-122.8.86.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10002": {"status": "active",
+                                                                                              "failures": 0},
+    "http://user-spz4nq4hh5-ip-122.8.15.166:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10003": {"status": "active",
+                                                                                              "failures": 0},
+    "http://user-spz4nq4hh5-ip-122.8.87.234:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10004": {"status": "active",
+                                                                                              "failures": 0},
+    "http://user-spz4nq4hh5-ip-122.8.16.212:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10005": {"status": "active",
+                                                                                              "failures": 0},
+    "http://user-spz4nq4hh5-ip-122.8.83.60:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10006": {"status": "active",
+                                                                                             "failures": 0},
+    "http://user-spz4nq4hh5-ip-122.8.83.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10007": {"status": "active",
+                                                                                              "failures": 0},
+    "http://user-spz4nq4hh5-ip-122.8.87.216:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10008": {"status": "active",
+                                                                                              "failures": 0},
+    "http://user-spz4nq4hh5-ip-122.8.87.251:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10009": {"status": "active",
+                                                                                              "failures": 0},
+    "http://user-spz4nq4hh5-ip-122.8.16.227:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10010": {"status": "active",
+                                                                                              "failures": 0}
+}
+
+# 创建一个队列来管理启动任务
+scraper_queue = Queue()
+
+
+def scheduler():
+    while True:
+        task = scraper_queue.get()
+        if task is None:
+            break  # 退出调度器
+        account, market_type, scraper_id = task
+        # 启动抓取线程
+        start_scraper_thread(account, market_type, scraper_id)
+        # 随机等待3到5秒
+        time.sleep(random.uniform(3, 5))
+        scraper_queue.task_done()
+
+
+
+
+# 启动调度线程
+scheduler_thread = threading.Thread(target=scheduler, daemon=True)
+scheduler_thread.start()
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    "Mozilla/5.0 (X11; Linux x86_64)",
+    # 添加更多的User-Agent字符串
 ]
 
 
 def get_random_proxy():
-    return random.choice(IP_POOL)
+    active_proxies = [proxy for proxy, info in IP_POOL.items() if info["status"] == "active"]
+    if not active_proxies:
+        raise Exception("所有代理已被封禁")
+    return random.choice(active_proxies)
+
+
+def get_new_proxy(current_proxy):
+    with status_lock:
+        available_proxies = [proxy for proxy, info in IP_POOL.items() if
+                             info["status"] == "active" and proxy != current_proxy]
+    if not available_proxies:
+        print("没有可用的代理来重启线程")
+        return None
+    new_proxy = random.choice(available_proxies)
+    return new_proxy
 
 
 def init_driver(proxy=None):
@@ -94,6 +147,10 @@ def init_driver(proxy=None):
     chrome_options.add_argument('--disable-extensions')
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
+
+    # 随机选择一个User-Agent
+    user_agent = random.choice(USER_AGENTS)
+    chrome_options.add_argument(f'user-agent={user_agent}')
 
     try:
         driver = webdriver.Chrome(options=chrome_options, seleniumwire_options=seleniumwire_options)
@@ -130,13 +187,22 @@ def login(driver, username):
         login_button = wait.until(EC.element_to_be_clickable((By.ID, 'btn_login')))
         login_button.click()
 
-        # 处理可能的弹窗
+        # 处理可能的弹窗，增加重试机制
         try:
-            popup_wait = WebDriverWait(driver, 5)
-            no_button = popup_wait.until(EC.element_to_be_clickable((By.ID, 'C_no_btn')))
-            no_button.click()
+            for _ in range(3):  # 尝试3次
+                popup_wait = WebDriverWait(driver, 10)
+                no_button = popup_wait.until(EC.element_to_be_clickable((By.ID, 'C_no_btn')))
+                no_button.click()
+                print(f"{username} 已点击弹窗中的 'No' 按钮")
+                time.sleep(1)  # 等待弹窗消失
         except:
             pass  # 如果没有弹窗，继续执行
+
+        # 检查是否登录成功或遇到被禁止页面
+        if check_forbidden_page(driver):
+            print(f"{username} 登录后被禁止访问")
+            return False
+
         # 等待导航到足球页面
         wait.until(EC.visibility_of_element_located((By.XPATH, '//div[span[text()="Soccer"]]')))
         print(f"{username} 登录成功")
@@ -144,6 +210,17 @@ def login(driver, username):
     except Exception as e:
         print(f"{username} 登录失败或未找到滚球比赛")
         traceback.print_exc()
+        return False
+
+
+def check_forbidden_page(driver):
+    try:
+        page_source = driver.page_source
+        if ('被禁止' in page_source) or ('FORBIDDEN' in page_source):
+            return True
+        return False
+    except Exception as e:
+        print(f"检查被封禁页面时出错: {e}")
         return False
 
 
@@ -427,7 +504,7 @@ def run_scraper(account, market_type, scraper_id, proxy):
     # 设置默认值
     username = account['username']
     filename = f"{username}_{market_type}_data.csv"
-    interval = 0.3  # 默认抓取间隔（秒）
+    interval = random.uniform(1, 3)  # 随机抓取间隔（秒）
 
     stop_event = threading.Event()
     thread_control_events[scraper_id] = stop_event
@@ -463,22 +540,46 @@ def run_scraper(account, market_type, scraper_id, proxy):
                     # 进入数据抓取循环
                     while not stop_event.is_set():
                         try:
+                            # 检查是否被封禁
+                            if check_forbidden_page(driver):
+                                raise Exception("检测到被封禁页面")
+
                             soup = get_market_data(driver)
                             if soup:
                                 data = parse_market_data(soup, market_type)
                                 save_to_csv(data, filename)
                             else:
                                 print(f"{username} 未获取到数据 使用代理: {proxy}")
+                                raise Exception("未获取到数据")
                         except Exception as e:
+                            if stop_event.is_set():
+                                print(f"Scraper ID {scraper_id} 已被停止。")
+                                break
                             print(f"{username} 抓取数据时发生错误: {e} 使用代理: {proxy}")
                             traceback.print_exc()
+                            with status_lock:
+                                thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
+                            # 更新代理状态
+                            with status_lock:
+                                IP_POOL[proxy]["failures"] += 1
+                                if IP_POOL[proxy]["failures"] >= 3:
+                                    IP_POOL[proxy]["status"] = "banned"
+                                    print(f"代理 {proxy} 已被封禁")
+                            # 尝试使用新的代理重启
+                            new_proxy = get_new_proxy(proxy)
+                            if new_proxy:
+                                print(f"尝试使用新代理 {new_proxy} 重启 Scraper ID {scraper_id}")
+                                # 生成新的 scraper_id
+                                new_scraper_id = f"{account['username']}_{market_type}_{int(time.time())}"
+                                # 启动新的抓取线程
+                                start_scraper_thread(account, market_type, new_scraper_id, new_proxy)
+                            break
                         time.sleep(interval)
                 except Exception as e:
                     print(f"{username} 未找到市场类型按钮: {market_type} 使用代理: {proxy}")
                     traceback.print_exc()
                     with status_lock:
                         thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
-                        print(f"Scraper ID {scraper_id} 状态更新为: 已停止。 使用代理: {proxy}")
             else:
                 with status_lock:
                     thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
@@ -506,8 +607,41 @@ def run_scraper(account, market_type, scraper_id, proxy):
 
 
 
+
+def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
+    if not scraper_id:
+        # 生成唯一的 scraper_id
+        scraper_id = f"{account['username']}_{market_type}_{int(time.time())}"
+
+    if not proxy:
+        try:
+            # 获取一个随机代理
+            proxy = get_random_proxy()
+        except Exception as e:
+            print(f"无法获取代理: {e}")
+            return
+
+    # 初始化线程状态
+    with status_lock:
+        thread_status[scraper_id] = "正在启动..."
+        print(f"Scraper ID {scraper_id} 状态更新为: 正在启动... 使用代理: {proxy}")
+
+    # 启动新的抓取线程，传递代理参数
+    scraper_thread = threading.Thread(target=run_scraper, args=(account, market_type, scraper_id, proxy), daemon=True)
+    scraper_thread.start()
+
+    # 将线程添加到活跃线程列表
+    active_threads.append(scraper_thread)
+
+    # 更新Account中的ScraperId
+    account['scraper_id'] = scraper_id
+
+
+
+
+# Flask路由
 @app.route('/start_scraper', methods=['POST'])
-def start_scraper():
+def start_scraper_api():
     """
     接收来自客户端的请求，启动相应的抓取线程。
     请求体应包含 'username', 'market_type'。
@@ -528,26 +662,17 @@ def start_scraper():
     # 创建账户字典
     account = {'username': username}
 
-    # 生成唯一的 scraper_id
+    # 生成新的 scraper_id
     scraper_id = f"{username}_{market_type}_{int(time.time())}"
 
-    # 获取一个随机代理
-    proxy = get_random_proxy()
-
-    # 初始化线程状态
-    with status_lock:
-        thread_status[scraper_id] = "正在启动..."
-        print(f"Scraper ID {scraper_id} 状态更新为: 正在启动... 使用代理: {proxy}")
-
-    # 启动新的抓取线程，传递代理参数
-    scraper_thread = threading.Thread(target=run_scraper, args=(account, market_type, scraper_id, proxy), daemon=True)
-    scraper_thread.start()
-
-    # 将线程添加到活跃线程列表
-    active_threads.append(scraper_thread)
+    # 将启动任务加入队列
+    scraper_queue.put((account, market_type, scraper_id))
+    print(f"已将 {username} - {market_type} 加入启动队列，Scraper ID: {scraper_id}")
 
     return jsonify(
-        {'status': 'success', 'message': f"已启动抓取线程: {username} - {market_type}", 'scraper_id': scraper_id}), 200
+        {'status': 'success', 'message': f"已将 {username} - {market_type} 加入启动队列", 'scraper_id': scraper_id}), 200
+
+
 
 
 @app.route('/stop_scraper', methods=['POST'])
@@ -582,7 +707,6 @@ def stop_scraper():
     return jsonify({'status': 'success', 'message': f"已停止抓取线程: {scraper_id}"}), 200
 
 
-
 @app.route('/delete_scraper', methods=['POST'])
 def delete_scraper():
     """
@@ -614,9 +738,6 @@ def delete_scraper():
 
     return jsonify({'status': 'success', 'message': f"已删除抓取线程: {scraper_id}"}), 200
 
-
-
-
 @app.route('/get_status', methods=['GET'])
 def get_status():
     """
@@ -639,3 +760,4 @@ if __name__ == "__main__":
     # 启动Flask服务器
     # 你可以根据需要更改host和port
     app.run(host='0.0.0.0', port=5021)
+
