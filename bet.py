@@ -27,10 +27,19 @@ status_lock = threading.Lock()
 FIXED_PASSWORD = 'dddd1111DD'
 
 # 定义要抓取的市场类型及其对应的按钮ID
+# 更新 MARKET_TYPES 字典，包含所有可能的 market_type 及其对应的按钮 ID
 MARKET_TYPES = {
-    'HDP_OU': 'tab_rnou',  # 让球盘/大小球的按钮ID
-    'CORNERS': 'tab_cn'  # 角球的按钮ID
+                    # 角球的按钮ID
+    'Full_Handicap': 'tab_rnou',            # 全场让分盘按钮ID
+    'Full_OverUnder': 'tab_rnou',          # 全场大小球按钮ID
+    'Full_Corners_Handicap': 'tab_cn',  # 全场角球让分盘按钮ID
+    'Full_Corners_OverUnder': 'tab_cn',# 全场角球大小球按钮ID
+    'Half_Handicap': 'tab_rnou',            # 上半场让分盘按钮ID
+    'Half_OverUnder': 'tab_rnou',          # 上半场大小球按钮ID
+    'Half_Corners_Handicap': 'tab_cn',  # 上半场角球让分盘按钮ID
+    'Half_Corners_OverUnder': 'tab_cn' # 上半场角球大小球按钮ID
 }
+
 
 # 创建Flask应用
 app = Flask(__name__)
@@ -309,13 +318,11 @@ def extract_match_info(match_container, league_name, market_type):
         # 初始化数据字典
         match_info = {
             'league': league_name,
-            'match_time': match_time,
             'home_team': home_team,
             'away_team': away_team,
             'home_score': home_score,
             'away_score': away_score,
-            'home_corners': '',  # 预留字段
-            'away_corners': ''  # 预留字段
+            'match_time': match_time,
         }
 
         # 提取赔率信息
@@ -503,7 +510,7 @@ def save_to_csv(data, filename):
 def run_scraper(account, market_type, scraper_id, proxy):
     # 设置默认值
     username = account['username']
-    filename = f"{username}_{market_type}_data.csv"
+    filename = f"{username}_data.csv"
     interval = random.uniform(1, 3)  # 随机抓取间隔（秒）
 
     stop_event = threading.Event()
@@ -534,6 +541,17 @@ def run_scraper(account, market_type, scraper_id, proxy):
                     button.click()
                     print(f"{username} 已点击 {market_type} 按钮 使用代理: {proxy}")
 
+                    # 设置 scraping_market_type 基于 market_type
+                    if market_type in ['Full_Handicap', 'Half_Handicap', 'Full_OverUnder', 'Half_OverUnder']:
+                        scraping_market_type = 'HDP_OU'
+                    elif market_type in ['Full_Corners_Handicap', 'Half_Corners_Handicap',
+                                        'Full_Corners_OverUnder', 'Half_Corners_OverUnder']:
+                        scraping_market_type = 'CORNERS'
+                    else:
+                        raise Exception(f"未处理的 market_type: {market_type}")
+
+                    print(f"Scraping Market Type set to: {scraping_market_type}")
+
                     # 等待页面加载
                     time.sleep(5)
 
@@ -546,8 +564,9 @@ def run_scraper(account, market_type, scraper_id, proxy):
 
                             soup = get_market_data(driver)
                             if soup:
-                                data = parse_market_data(soup, market_type)
+                                data = parse_market_data(soup, scraping_market_type)
                                 save_to_csv(data, filename)
+                                print(f"账户 '{username}' 已成功抓取数据并保存到 {filename}")
                             else:
                                 print(f"{username} 未获取到数据 使用代理: {proxy}")
                                 raise Exception("未获取到数据")
@@ -570,7 +589,7 @@ def run_scraper(account, market_type, scraper_id, proxy):
                             if new_proxy:
                                 print(f"尝试使用新代理 {new_proxy} 重启 Scraper ID {scraper_id}")
                                 # 生成新的 scraper_id
-                                new_scraper_id = f"{account['username']}_{market_type}_{int(time.time())}"
+                                new_scraper_id = f"{username}_{market_type}_{int(time.time())}"
                                 # 启动新的抓取线程
                                 start_scraper_thread(account, market_type, new_scraper_id, new_proxy)
                             break
@@ -604,6 +623,7 @@ def run_scraper(account, market_type, scraper_id, proxy):
             if scraper_id in thread_control_events:
                 del thread_control_events[scraper_id]
             # 保持 thread_status 直到删除
+
 
 
 
@@ -644,10 +664,10 @@ def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
 def start_scraper_api():
     """
     接收来自客户端的请求，启动相应的抓取线程。
-    请求体应包含 'username', 'market_type'。
+    请求体应包含 'username', 'market_type', 'min_odds', 'max_odds', 'max_bets', 'bet_interval'。
     """
     data = request.json
-    required_fields = ['username', 'market_type']
+    required_fields = ['username', 'market_type', 'min_odds', 'max_odds', 'max_bets', 'bet_interval']
 
     # 检查请求数据是否包含所有必需字段
     if not all(field in data for field in required_fields):
@@ -655,22 +675,33 @@ def start_scraper_api():
 
     username = data['username']
     market_type = data['market_type']
+    min_odds = data['min_odds']
+    max_odds = data['max_odds']
+    max_bets = data['max_bets']
+    bet_interval = data['bet_interval']
 
     if market_type not in MARKET_TYPES:
         return jsonify({'status': 'error', 'message': f"无效的 market_type: {market_type}"}), 400
 
-    # 创建账户字典
-    account = {'username': username}
+    # 创建账户字典，包括新增的参数
+    account = {
+        'username': username,
+        'min_odds': min_odds,
+        'max_odds': max_odds,
+        'max_bets': max_bets,        # 仅用于记录
+        'bet_interval': bet_interval # 仅用于记录
+    }
 
     # 生成新的 scraper_id
     scraper_id = f"{username}_{market_type}_{int(time.time())}"
 
-    # 将启动任务加入队列
+    # 将启动任务加入队列，包括新增的参数
     scraper_queue.put((account, market_type, scraper_id))
-    print(f"已将 {username} - {market_type} 加入启动队列，Scraper ID: {scraper_id}")
+    print(f"已将 {username} - {market_type} 加入启动队列，Scraper ID: {scraper_id}，参数: min_odds={min_odds}, max_odds={max_odds}, max_bets={max_bets}, bet_interval={bet_interval}")
 
     return jsonify(
         {'status': 'success', 'message': f"已将 {username} - {market_type} 加入启动队列", 'scraper_id': scraper_id}), 200
+
 
 
 
@@ -760,4 +791,3 @@ if __name__ == "__main__":
     # 启动Flask服务器
     # 你可以根据需要更改host和port
     app.run(host='0.0.0.0', port=5021)
-
