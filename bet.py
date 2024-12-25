@@ -58,11 +58,11 @@ IP_POOL = {
     "http://user-spz4nq4hh5-ip-122.8.86.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10002": {"status": "active",
                                                                                               "failures": 0},
     #"http://user-spz4nq4hh5-ip-122.8.15.166:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10003": {"status": "active",
-                                                                                              #"failures": 0},
+    #"failures": 0},
     "http://user-spz4nq4hh5-ip-122.8.87.234:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10004": {"status": "active",
                                                                                               "failures": 0},
     #"http://user-spz4nq4hh5-ip-122.8.16.212:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10005": {"status": "active",
-                                                                                              #"failures": 0},
+    #"failures": 0},
     "http://user-spz4nq4hh5-ip-122.8.83.60:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10006": {"status": "active",
                                                                                              "failures": 0},
     "http://user-spz4nq4hh5-ip-122.8.83.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10007": {"status": "active",
@@ -72,7 +72,7 @@ IP_POOL = {
     "http://user-spz4nq4hh5-ip-122.8.87.251:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10009": {"status": "active",
                                                                                               "failures": 0},
     #"http://user-spz4nq4hh5-ip-122.8.16.227:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10010": {"status": "active",
-                                                                                              #"failures": 0}
+    #"failures": 0}
 }
 
 # 创建一个队列来管理启动任务
@@ -506,9 +506,7 @@ def save_to_csv(data, filename):
 
 
 def run_scraper(account, market_type, scraper_id, proxy, alert_queue):
-    # 设置默认值
     username = account['username']
-    interval = random.uniform(1, 3)  # 随机抓取间隔（秒）
 
     stop_event = threading.Event()
     thread_control_events[scraper_id] = stop_event
@@ -518,16 +516,16 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue):
     try:
         driver = init_driver(proxy)
         # 等待代理配置生效
-        time.sleep(2)  # 根据需要调整时间
+        time.sleep(2)
 
         with status_lock:
-            thread_status[scraper_id] = "启动中"  # 设置为“启动中”（黄色）
+            thread_status[scraper_id] = "启动中"
             print(f"Scraper ID {scraper_id} 状态更新为: 启动中 使用代理: {proxy}")
 
         if login(driver, username):
             if navigate_to_football(driver):
                 with status_lock:
-                    thread_status[scraper_id] = "运行中"  # 设置为“运行中”（绿色）
+                    thread_status[scraper_id] = "运行中"
                     print(f"Scraper ID {scraper_id} 状态更新为: 运行中 使用代理: {proxy}")
 
                 try:
@@ -542,7 +540,7 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue):
                     if market_type in ['Full_Handicap', 'Half_Handicap', 'Full_OverUnder', 'Half_OverUnder']:
                         scraping_market_type = 'HDP_OU'
                     elif market_type in ['Full_Corners_Handicap', 'Half_Corners_Handicap',
-                                         'Full_Corners_OverUnder', 'Half_Corners_OverUnder']:
+                                        'Full_Corners_OverUnder', 'Half_Corners_OverUnder']:
                         scraping_market_type = 'CORNERS'
                     else:
                         raise Exception(f"未处理的 market_type: {market_type}")
@@ -552,77 +550,60 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue):
                     # 等待页面加载
                     time.sleep(5)
 
-                    # 进入数据抓取循环
+                    # 等待并处理alert
                     while not stop_event.is_set():
                         try:
-                            # 检查是否被封禁
-                            if check_forbidden_page(driver):
-                                raise Exception("检测到被封禁页面")
+                            alert = alert_queue.get(timeout=1)  # 等待alert，超时后继续检查停止事件
+                        except Empty:
+                            continue  # 没有alert，继续等待
 
+                        print(f"接收到Alert: {alert}")
+
+                        # 根据alert信息抓取对应比赛的数据
+                        try:
+                            # 假设当前页面已经加载了相关市场类型的比赛，直接抓取页面数据
                             soup = get_market_data(driver)
                             if soup:
                                 data = parse_market_data(soup, scraping_market_type)
+                                # 查找匹配的比赛
+                                for match in data:
+                                    if (alert['league_name'] == match['league'] and
+                                        alert['home_team'] == match['home_team'] and
+                                        alert['away_team'] == match['away_team']):
+                                        print("匹配到Alert，相关比赛数据如下：")
+                                        print(json.dumps(match, ensure_ascii=False, indent=4))
 
-                                # 处理 alert 数据
-                                try:
-                                    while True:
-                                        alert = alert_queue.get_nowait()
-                                        # 查找匹配的比赛
-                                        for match in data:
-                                            if (alert['league_name'] == match['league'] and
-                                                    alert['home_team'] == match['home_team'] and
-                                                    alert['away_team'] == match['away_team']):
-                                                print("匹配到Alert，相关比赛数据如下：")
-                                                print(json.dumps(match, ensure_ascii=False, indent=4))
-                                        alert_queue.task_done()
-                                except Empty:
-                                    pass  # 没有更多的 alert
-
+                                        # 调用点击赔率函数
+                                        click_odds(driver, alert)
+                                        break
+                                else:
+                                    print(f"未找到匹配的比赛: {alert['home_team']} vs {alert['away_team']} in {alert['league_name']}")
                             else:
                                 print(f"{username} 未获取到数据 使用代理: {proxy}")
-                                raise Exception("未获取到数据")
                         except Exception as e:
-                            if stop_event.is_set():
-                                print(f"Scraper ID {scraper_id} 已被停止。")
-                                break
-                            print(f"{username} 抓取数据时发生错误: {e} 使用代理: {proxy}")
+                            print(f"处理Alert时发生错误: {e} 使用代理: {proxy}")
                             traceback.print_exc()
-                            with status_lock:
-                                thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
-                            # 更新代理状态
-                            with status_lock:
-                                IP_POOL[proxy]["failures"] += 1
-                                if IP_POOL[proxy]["failures"] >= 3:
-                                    IP_POOL[proxy]["status"] = "banned"
-                                    print(f"代理 {proxy} 已被封禁")
-                            # 尝试使用新的代理重启
-                            new_proxy = get_new_proxy(proxy)
-                            if new_proxy:
-                                print(f"尝试使用新代理 {new_proxy} 重启 Scraper ID {scraper_id}")
-                                # 生成新的 scraper_id
-                                new_scraper_id = f"{username}_{market_type}_{int(time.time())}"
-                                # 启动新的抓取线程
-                                start_scraper_thread(account, market_type, new_scraper_id, new_proxy)
-                            break
-                        time.sleep(interval)
+
+                        alert_queue.task_done()
+
                 except Exception as e:
-                    print(f"{username} 未找到市场类型按钮: {market_type} 使用代理: {proxy}")
+                    print(f"{username} 处理市场类型按钮时发生错误: {market_type} 使用代理: {proxy}")
                     traceback.print_exc()
                     with status_lock:
-                        thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
+                        thread_status[scraper_id] = "已停止"
             else:
                 with status_lock:
-                    thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
+                    thread_status[scraper_id] = "已停止"
                     print(f"Scraper ID {scraper_id} 状态更新为: 已停止。 使用代理: {proxy}")
         else:
             with status_lock:
-                thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
+                thread_status[scraper_id] = "已停止"
                 print(f"Scraper ID {scraper_id} 状态更新为: 已停止。 使用代理: {proxy}")
     except Exception as e:
         print(f"{username} 运行过程中发生错误: {e} 使用代理: {proxy}")
         traceback.print_exc()
         with status_lock:
-            thread_status[scraper_id] = "已停止"  # 设置为“已停止”（灰色）
+            thread_status[scraper_id] = "已停止"
             print(f"Scraper ID {scraper_id} 状态更新为: 已停止。 使用代理: {proxy}")
     finally:
         if driver:
@@ -702,6 +683,46 @@ def map_alert_to_market_type(alert):
         return market_type
     else:
         return None
+
+
+def click_odds(driver, alert):
+    try:
+        bet_type_name = alert.get('bet_type_name', '')
+        odds_name = alert.get('odds_name', '')
+
+        # 从 bet_type_name 中提取盘口类型和盘口数值
+        # 例如，'SPREAD_FT_4.5' 提取 'SPREAD_FT' 和 '4.5'
+        bet_type_parts = bet_type_name.split('_')
+        if len(bet_type_parts) < 3:
+            print(f"无法解析 bet_type_name: {bet_type_name}")
+            return
+        bet_type_prefix = '_'.join(bet_type_parts[:2])  # 'SPREAD_FT'
+        handicap = bet_type_parts[2]  # '4.5'
+
+        # 根据 odds_name 确定是主队还是客队
+        if odds_name == 'HomeOdds':
+            suffix = '_REH'  # 假设 '_REH' 对应主队赔率
+        elif odds_name == 'AwayOdds':
+            suffix = '_REC'  # 假设 '_REC' 对应客队赔率
+        else:
+            print(f"未知的 odds_name: {odds_name}")
+            return
+
+        # 构建赔率按钮的 ID
+        button_id = f"{bet_type_prefix}_{handicap}{suffix}"
+
+        # 等待按钮可点击
+        odds_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, button_id))
+        )
+
+        # 点击按钮
+        odds_button.click()
+        print(f"成功点击盘口赔率按钮: {button_id}")
+
+    except Exception as e:
+        print(f"点击盘口赔率按钮失败: {e}")
+        traceback.print_exc()
 
 
 # Flask路由
