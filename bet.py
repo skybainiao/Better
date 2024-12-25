@@ -1,7 +1,7 @@
 import json
 import os
 import threading
-from queue import Queue
+from queue import Queue, Empty
 import random
 import pandas as pd
 import requests
@@ -29,18 +29,18 @@ FIXED_PASSWORD = 'dddd1111DD'
 # 定义要抓取的市场类型及其对应的按钮ID
 # 更新 MARKET_TYPES 字典，包含所有可能的 market_type 及其对应的按钮 ID
 MARKET_TYPES = {
-                    # 角球的按钮ID
-    'Full_Handicap': 'tab_rnou',            # 全场让分盘按钮ID
-    'Full_OverUnder': 'tab_rnou',          # 全场大小球按钮ID
+    # 角球的按钮ID
+    'Full_Handicap': 'tab_rnou',  # 全场让分盘按钮ID
+    'Full_OverUnder': 'tab_rnou',  # 全场大小球按钮ID
     'Full_Corners_Handicap': 'tab_cn',  # 全场角球让分盘按钮ID
-    'Full_Corners_OverUnder': 'tab_cn',# 全场角球大小球按钮ID
-    'Half_Handicap': 'tab_rnou',            # 上半场让分盘按钮ID
-    'Half_OverUnder': 'tab_rnou',          # 上半场大小球按钮ID
+    'Full_Corners_OverUnder': 'tab_cn',  # 全场角球大小球按钮ID
+    'Half_Handicap': 'tab_rnou',  # 上半场让分盘按钮ID
+    'Half_OverUnder': 'tab_rnou',  # 上半场大小球按钮ID
     'Half_Corners_Handicap': 'tab_cn',  # 上半场角球让分盘按钮ID
-    'Half_Corners_OverUnder': 'tab_cn' # 上半场角球大小球按钮ID
+    'Half_Corners_OverUnder': 'tab_cn'  # 上半场角球大小球按钮ID
 }
-
-
+# 1. 创建一个字典来映射 market_type 到对应的 alert 队列
+market_type_to_alert_queue = {}
 # 创建Flask应用
 app = Flask(__name__)
 
@@ -57,12 +57,12 @@ IP_POOL = {
                                                                                               "failures": 0},
     "http://user-spz4nq4hh5-ip-122.8.86.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10002": {"status": "active",
                                                                                               "failures": 0},
-    "http://user-spz4nq4hh5-ip-122.8.15.166:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10003": {"status": "active",
-                                                                                              "failures": 0},
+    #"http://user-spz4nq4hh5-ip-122.8.15.166:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10003": {"status": "active",
+                                                                                              #"failures": 0},
     "http://user-spz4nq4hh5-ip-122.8.87.234:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10004": {"status": "active",
                                                                                               "failures": 0},
-    "http://user-spz4nq4hh5-ip-122.8.16.212:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10005": {"status": "active",
-                                                                                              "failures": 0},
+    #"http://user-spz4nq4hh5-ip-122.8.16.212:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10005": {"status": "active",
+                                                                                              #"failures": 0},
     "http://user-spz4nq4hh5-ip-122.8.83.60:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10006": {"status": "active",
                                                                                              "failures": 0},
     "http://user-spz4nq4hh5-ip-122.8.83.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10007": {"status": "active",
@@ -71,8 +71,8 @@ IP_POOL = {
                                                                                               "failures": 0},
     "http://user-spz4nq4hh5-ip-122.8.87.251:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10009": {"status": "active",
                                                                                               "failures": 0},
-    "http://user-spz4nq4hh5-ip-122.8.16.227:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10010": {"status": "active",
-                                                                                              "failures": 0}
+    #"http://user-spz4nq4hh5-ip-122.8.16.227:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10010": {"status": "active",
+                                                                                              #"failures": 0}
 }
 
 # 创建一个队列来管理启动任务
@@ -90,8 +90,6 @@ def scheduler():
         # 随机等待3到5秒
         time.sleep(random.uniform(3, 5))
         scraper_queue.task_done()
-
-
 
 
 # 启动调度线程
@@ -507,10 +505,9 @@ def save_to_csv(data, filename):
     #print(f"数据保存到 {filename}")
 
 
-def run_scraper(account, market_type, scraper_id, proxy):
+def run_scraper(account, market_type, scraper_id, proxy, alert_queue):
     # 设置默认值
     username = account['username']
-    filename = f"{username}_data.csv"
     interval = random.uniform(1, 3)  # 随机抓取间隔（秒）
 
     stop_event = threading.Event()
@@ -545,7 +542,7 @@ def run_scraper(account, market_type, scraper_id, proxy):
                     if market_type in ['Full_Handicap', 'Half_Handicap', 'Full_OverUnder', 'Half_OverUnder']:
                         scraping_market_type = 'HDP_OU'
                     elif market_type in ['Full_Corners_Handicap', 'Half_Corners_Handicap',
-                                        'Full_Corners_OverUnder', 'Half_Corners_OverUnder']:
+                                         'Full_Corners_OverUnder', 'Half_Corners_OverUnder']:
                         scraping_market_type = 'CORNERS'
                     else:
                         raise Exception(f"未处理的 market_type: {market_type}")
@@ -565,8 +562,22 @@ def run_scraper(account, market_type, scraper_id, proxy):
                             soup = get_market_data(driver)
                             if soup:
                                 data = parse_market_data(soup, scraping_market_type)
-                                save_to_csv(data, filename)
-                                print(f"账户 '{username}' 已成功抓取数据并保存到 {filename}")
+
+                                # 处理 alert 数据
+                                try:
+                                    while True:
+                                        alert = alert_queue.get_nowait()
+                                        # 查找匹配的比赛
+                                        for match in data:
+                                            if (alert['league_name'] == match['league'] and
+                                                    alert['home_team'] == match['home_team'] and
+                                                    alert['away_team'] == match['away_team']):
+                                                print("匹配到Alert，相关比赛数据如下：")
+                                                print(json.dumps(match, ensure_ascii=False, indent=4))
+                                        alert_queue.task_done()
+                                except Empty:
+                                    pass  # 没有更多的 alert
+
                             else:
                                 print(f"{username} 未获取到数据 使用代理: {proxy}")
                                 raise Exception("未获取到数据")
@@ -625,9 +636,6 @@ def run_scraper(account, market_type, scraper_id, proxy):
             # 保持 thread_status 直到删除
 
 
-
-
-
 def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
     if not scraper_id:
         # 生成唯一的 scraper_id
@@ -646,8 +654,13 @@ def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
         thread_status[scraper_id] = "正在启动..."
         print(f"Scraper ID {scraper_id} 状态更新为: 正在启动... 使用代理: {proxy}")
 
-    # 启动新的抓取线程，传递代理参数
-    scraper_thread = threading.Thread(target=run_scraper, args=(account, market_type, scraper_id, proxy), daemon=True)
+    # 创建一个专用的 alert 队列并注册到字典中
+    alert_queue = Queue()
+    market_type_to_alert_queue[market_type] = alert_queue
+
+    # 启动新的抓取线程，传递 alert_queue
+    scraper_thread = threading.Thread(target=run_scraper, args=(account, market_type, scraper_id, proxy, alert_queue),
+                                      daemon=True)
     scraper_thread.start()
 
     # 将线程添加到活跃线程列表
@@ -657,9 +670,62 @@ def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
     account['scraper_id'] = scraper_id
 
 
+# 2. 定义一个函数来根据 alert 的信息映射到对应的 market_type
+def map_alert_to_market_type(alert):
+    bet_type_name = alert.get('bet_type_name', '')
+    match_type = alert.get('match_type', '')
+
+    # Determine period
+    if 'FT' in bet_type_name:
+        period = 'Full'
+    elif '1H' in bet_type_name:
+        period = 'Half'
+    else:
+        period = None
+
+    # Determine bet type
+    if bet_type_name.startswith('SPREAD'):
+        bet_type = 'Handicap'
+    elif bet_type_name.startswith('TOTAL_POINTS'):
+        bet_type = 'OverUnder'
+    else:
+        bet_type = None
+
+    # Determine if corner
+    if match_type == 'corner':
+        corner = 'Corners_'
+    else:
+        corner = ''
+
+    if period and bet_type:
+        market_type = f"{period}_{corner}{bet_type}"
+        return market_type
+    else:
+        return None
 
 
 # Flask路由
+@app.route('/receive_data', methods=['POST'])
+def receive_data():
+    data = request.get_json()
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No JSON data received'}), 400
+    print(data)
+
+    # 根据 alert 的信息映射到对应的 market_type
+    market_type = map_alert_to_market_type(data)
+    if market_type and market_type in MARKET_TYPES:
+        if market_type in market_type_to_alert_queue:
+            market_type_to_alert_queue[market_type].put(data)
+            print(f"Alert 分配给 market_type: {market_type}")
+        else:
+            print(f"没有找到对应的 Scraper 处理 market_type: {market_type}")
+    else:
+        print(f"无法映射 market_type for alert: {data}")
+
+    return jsonify({'status': 'success', 'message': 'Data received'}), 200
+
+
 @app.route('/start_scraper', methods=['POST'])
 def start_scraper_api():
     """
@@ -688,8 +754,8 @@ def start_scraper_api():
         'username': username,
         'min_odds': min_odds,
         'max_odds': max_odds,
-        'max_bets': max_bets,        # 仅用于记录
-        'bet_interval': bet_interval # 仅用于记录
+        'max_bets': max_bets,  # 仅用于记录
+        'bet_interval': bet_interval  # 仅用于记录
     }
 
     # 生成新的 scraper_id
@@ -697,13 +763,12 @@ def start_scraper_api():
 
     # 将启动任务加入队列，包括新增的参数
     scraper_queue.put((account, market_type, scraper_id))
-    print(f"已将 {username} - {market_type} 加入启动队列，Scraper ID: {scraper_id}，参数: min_odds={min_odds}, max_odds={max_odds}, max_bets={max_bets}, bet_interval={bet_interval}")
+    print(
+        f"已将 {username} - {market_type} 加入启动队列，Scraper ID: {scraper_id}，参数: min_odds={min_odds}, max_odds={max_odds}, max_bets={max_bets}, bet_interval={bet_interval}")
 
     return jsonify(
-        {'status': 'success', 'message': f"已将 {username} - {market_type} 加入启动队列", 'scraper_id': scraper_id}), 200
-
-
-
+        {'status': 'success', 'message': f"已将 {username} - {market_type} 加入启动队列",
+         'scraper_id': scraper_id}), 200
 
 
 @app.route('/stop_scraper', methods=['POST'])
@@ -768,6 +833,7 @@ def delete_scraper():
             print(f"Scraper ID {scraper_id} 已从状态列表中删除。")
 
     return jsonify({'status': 'success', 'message': f"已删除抓取线程: {scraper_id}"}), 200
+
 
 @app.route('/get_status', methods=['GET'])
 def get_status():
