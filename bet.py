@@ -1,22 +1,21 @@
-import json
-import os
-import threading
-from queue import Queue, Empty
-import random
-import pandas as pd
-import requests
-from seleniumwire import webdriver  # 使用 seleniumwire 的 webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from bs4 import BeautifulSoup
-import time
 import csv
+import json
+import random
+import threading
+import time
 import traceback
-from flask import Flask, request, jsonify
-from urllib.parse import urlparse
 import warnings
+from queue import Queue, Empty
+from urllib.parse import urlparse
+
+from bs4 import BeautifulSoup
+from flask import Flask, request, jsonify
+from selenium.common.exceptions import StaleElementReferenceException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from seleniumwire import webdriver  # 使用 seleniumwire 的 webdriver
 from urllib3.exceptions import InsecureRequestWarning
 
 # 用于跟踪抓取线程状态
@@ -685,40 +684,155 @@ def map_alert_to_market_type(alert):
         return None
 
 
-def click_odds(driver, alert):
+def click_odds(driver, alert, max_retries=3, wait_between_retries=1):
     try:
-        bet_type_name = alert.get('bet_type_name', '')
-        odds_name = alert.get('odds_name', '')
+        # 从 alert 中提取必要的信息，并去除多余空格
+        league_name = alert.get('league_name', '').strip()
+        home_team = alert.get('home_team', '').strip()
+        away_team = alert.get('away_team', '').strip()
+        bet_type_name = alert.get('bet_type_name', '').strip()
+        odds_name = alert.get('odds_name', '').strip()
 
-        # 从 bet_type_name 中提取盘口类型和盘口数值
-        # 例如，'SPREAD_FT_4.5' 提取 'SPREAD_FT' 和 '4.5'
+        # 解析 bet_type_name 来确定盘口类型和盘口数值
+        # 处理 'TOTAL_POINTS_FT_1.25' 和 'SPREAD_FT_-0.25' 等格式
         bet_type_parts = bet_type_name.split('_')
-        if len(bet_type_parts) < 3:
-            print(f"无法解析 bet_type_name: {bet_type_name}")
-            return
-        bet_type_prefix = '_'.join(bet_type_parts[:2])  # 'SPREAD_FT'
-        handicap = bet_type_parts[2]  # '4.5'
 
-        # 根据 odds_name 确定是主队还是客队
-        if odds_name == 'HomeOdds':
-            suffix = '_REH'  # 假设 '_REH' 对应主队赔率
-        elif odds_name == 'AwayOdds':
-            suffix = '_REC'  # 假设 '_REC' 对应客队赔率
+        if bet_type_parts[0] == 'TOTAL' and bet_type_parts[1] == 'POINTS':
+            if len(bet_type_parts) < 4:
+                print(f"无法解析 bet_type_name: {bet_type_name}")
+                return
+            bet_type = 'TOTAL_POINTS'
+            time_indicator = bet_type_parts[2]  # 'FT' 或 '1H'
+            ratio = bet_type_parts[3]  # '1.25'
         else:
-            print(f"未知的 odds_name: {odds_name}")
+            if len(bet_type_parts) < 3:
+                print(f"无法解析 bet_type_name: {bet_type_name}")
+                return
+            bet_type = bet_type_parts[0]  # 'SPREAD'
+            time_indicator = bet_type_parts[1]  # 'FT' 或 '1H'
+            ratio = bet_type_parts[2]  # '1.0' 或 '-0.25'
+
+        # 根据 bet_type 确定是 Handicap (HDP) 还是 Over/Under (ROU)
+        if bet_type == 'SPREAD':
+            market_section = 'Handicap'
+        elif bet_type == 'TOTAL_POINTS':
+            market_section = 'Goals O/U'
+        else:
+            print(f"未知的 bet_type: {bet_type}")
             return
 
-        # 构建赔率按钮的 ID
-        button_id = f"{bet_type_prefix}_{handicap}{suffix}"
+        # 根据 odds_name 确定是主队赔率还是客队赔率，或是 Over/Under
+        if market_section == 'Handicap':
+            if odds_name == 'HomeOdds':
+                ballhead_text = f"+{ratio}"
+            elif odds_name == 'AwayOdds':
+                ballhead_text = f"-{ratio}"
+            else:
+                print(f"未知的 odds_name: {odds_name}")
+                return
+        elif market_section == 'Goals O/U':
+            if odds_name == 'OverOdds':
+                ballou_text = 'O'
+                # 定义 ratio 到 text_ballhead 的映射
+                ratio_mapping = {
+                    '1.25': '1/1.5',
+                    '1.5': '1.5',
+                    '1.75': '1.5/2',
+                    '2.25': '2.5/3',
+                    '2.5': '2.5',
+                    '2.75': '2.5/3',
+                    '3': '3',
+                    # 添加更多映射根据需要
+                }
+                ballhead_text = ratio_mapping.get(ratio, ratio)
+                if ballhead_text == ratio:
+                    print(f"未定义的 ratio 映射: {ratio}")
+            elif odds_name == 'UnderOdds':
+                ballou_text = 'U'
+                ratio_mapping = {
+                    '1.25': '1/1.5',
+                    '1.5': '1.5',
+                    '1.75': '1.5/2',
+                    '2.25': '2.5/3',
+                    '2.5': '2.5',
+                    '2.75': '2.5/3',
+                    '3': '3',
+                    # 添加更多映射根据需要
+                }
+                ballhead_text = ratio_mapping.get(ratio, ratio)
+                if ballhead_text == ratio:
+                    print(f"未定义的 ratio 映射: {ratio}")
+            else:
+                print(f"未知的 odds_name: {odds_name}")
+                return
+        else:
+            print(f"未知的 market_section: {market_section}")
+            return
 
-        # 等待按钮可点击
-        odds_button = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.ID, button_id))
-        )
+        # 定义重试函数
+        def attempt_click():
+            # 1. 定位联赛 div，使用 contains() 模糊匹配 class 和 league_name
+            league_xpath = f"//div[contains(@class, 'btn_title_le') and .//tt[@id='lea_name' and contains(normalize-space(text()), '{league_name}')]]"
+            league_elements = driver.find_elements(By.XPATH, league_xpath)
+            print(f"找到 {len(league_elements)} 个联赛匹配 '{league_name}'")
+            if not league_elements:
+                print(f"未找到联赛: {league_name}")
+                return False
+            league_element = league_elements[0]
 
-        # 点击按钮
-        odds_button.click()
-        print(f"成功点击盘口赔率按钮: {button_id}")
+            # 2. 定位比赛 div，修正 XPath 路径
+            match_xpath = f"following-sibling::div[contains(@id, 'game_') and " \
+                          f".//div[contains(@class, 'box_team') and contains(@class, 'teamH')]/span[contains(@class, 'text_team') and normalize-space(text())='{home_team}'] and " \
+                          f".//div[contains(@class, 'box_team') and contains(@class, 'teamC')]/span[contains(@class, 'text_team') and normalize-space(text())='{away_team}']]"
+            match_elements = league_element.find_elements(By.XPATH, match_xpath)
+            print(f"找到 {len(match_elements)} 个比赛匹配 '{home_team} vs {away_team}'")
+            if not match_elements:
+                print(f"未找到比赛: {home_team} vs {away_team} in {league_name}")
+                return False
+            match_element = match_elements[0]
+
+            # 3. 定位盘口类型 section
+            bet_section_xpath = f".//div[contains(@class, 'form_lebet_hdpou') and .//div[@class='head_lebet']/span[text()='{market_section}']]"
+            bet_section_elements = match_element.find_elements(By.XPATH, bet_section_xpath)
+            if not bet_section_elements:
+                print(f"未找到盘口类型 section: {market_section} in 比赛 {home_team} vs {away_team}")
+                return False
+            bet_section_element = bet_section_elements[0]
+
+            # 4. 定位具体的赔率按钮
+            if market_section == 'Handicap':
+                # 对于 Handicap，只需匹配 text_ballhead
+                odds_button_xpath = f".//div[contains(@class, 'btn_hdpou_odd') and .//tt[@class='text_ballhead' and normalize-space(text())='{ballhead_text}']]"
+            elif market_section == 'Goals O/U':
+                # 对于 Goals O/U，需要匹配 text_ballou 和 text_ballhead
+                odds_button_xpath = f".//div[contains(@class, 'btn_hdpou_odd') and .//tt[@class='text_ballou' and normalize-space(text())='{ballou_text}'] and " \
+                                    f".//tt[@class='text_ballhead' and normalize-space(text())='{ballhead_text}']]"
+            else:
+                print(f"未知的 market_section: {market_section}")
+                return False
+
+            odds_buttons = bet_section_element.find_elements(By.XPATH, odds_button_xpath)
+            print(f"找到 {len(odds_buttons)} 个赔率按钮匹配 '{ballhead_text} ({odds_name})'")
+            if not odds_buttons:
+                print(f"未找到对应的赔率按钮: {ballhead_text} ({odds_name})")
+                return False
+            odds_button = odds_buttons[0]
+
+            # 5. 点击赔率按钮
+            odds_button.click()
+            print(f"成功点击盘口赔率按钮: {ballhead_text} ({odds_name})")
+            return True
+
+        # 重试机制
+        for attempt in range(1, max_retries + 1):
+            try:
+                if attempt_click():
+                    break  # 成功，跳出循环
+            except StaleElementReferenceException:
+                print(f"尝试 {attempt} 次后遇到 StaleElementReferenceException，正在重试...")
+                time.sleep(wait_between_retries)
+        else:
+            print("超过最大重试次数，点击赔率按钮失败。")
 
     except Exception as e:
         print(f"点击盘口赔率按钮失败: {e}")
