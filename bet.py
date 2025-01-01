@@ -78,6 +78,9 @@ IP_POOL = {
     #"http://user-spz4nq4hh5-ip-122.8.16.227:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10010": {"status": "active",
     #"failures": 0}
 }
+# 按顺序分配代理的相关变量
+proxy_list = list(IP_POOL.keys())
+current_proxy_index = 0
 
 # 创建一个队列来管理启动任务
 scraper_queue = Queue()
@@ -108,22 +111,27 @@ USER_AGENTS = [
 ]
 
 
-def get_random_proxy():
-    active_proxies = [proxy for proxy, info in IP_POOL.items() if info["status"] == "active"]
-    if not active_proxies:
-        raise Exception("所有代理已被封禁")
-    return random.choice(active_proxies)
+def get_sequential_proxy():
+    global current_proxy_index
+    with status_lock:
+        if current_proxy_index >= len(proxy_list):
+            raise Exception("所有代理已被封禁或已使用完毕")
+        proxy = proxy_list[current_proxy_index]
+        current_proxy_index += 1
+        IP_POOL[proxy]['status'] = 'used'  # 标记为已使用
+        return proxy
 
 
 def get_new_proxy(current_proxy):
+    global current_proxy_index
     with status_lock:
-        available_proxies = [proxy for proxy, info in IP_POOL.items() if
-                             info["status"] == "active" and proxy != current_proxy]
-    if not available_proxies:
-        print("没有可用的代理来重启线程")
-        return None
-    new_proxy = random.choice(available_proxies)
-    return new_proxy
+        if current_proxy_index >= len(proxy_list):
+            print("没有可用的代理来重启线程")
+            return None
+        new_proxy = proxy_list[current_proxy_index]
+        current_proxy_index += 1
+        IP_POOL[new_proxy]['status'] = 'used'  # 标记为已使用
+        return new_proxy
 
 
 def init_driver(proxy=None):
@@ -613,7 +621,7 @@ def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
     if not proxy:
         try:
             # 获取一个随机代理
-            proxy = get_random_proxy()
+            proxy = get_sequential_proxy()
         except Exception as e:
             print(f"无法获取代理: {e}")
             return
