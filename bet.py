@@ -485,30 +485,6 @@ def extract_odds_corners(odds_section):
     return odds
 
 
-def save_to_csv(data, filename):
-    if not data:
-        print(f"没有数据保存到 {filename}")
-        return
-    # 定义固定的字段名
-    fixed_fields = ['league', 'match_time', 'home_team', 'away_team', 'home_score', 'away_score', 'home_corners',
-                    'away_corners']
-    # 收集所有赔率类型
-    odds_fields = set()
-    for item in data:
-        odds_fields.update(item.keys() - set(fixed_fields))
-    # 定义最终的字段名，固定字段在前，赔率字段排序后追加
-    fieldnames = fixed_fields + sorted(odds_fields)
-    # 保存数据，覆盖模式
-    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in data:
-            # 仅包含定义的字段
-            clean_row = {k: v for k, v in row.items() if k in fieldnames}
-            writer.writerow(clean_row)
-    #print(f"数据保存到 {filename}")
-
-
 def run_scraper(account, market_type, scraper_id, proxy, alert_queue):
     username = account['username']
 
@@ -825,19 +801,18 @@ def click_odds(driver, alert):
                             # 定位具体的赔率按钮
                             if market_section == 'Handicap':
                                 if odds_type == 'Home':
-                                    # 查找带有 'strong_team' 类的按钮
                                     odds_button_xpath = (
                                         f".//div[contains(@class, 'btn_hdpou_odd') and "
-                                        f"contains(concat(' ', normalize-space(@class), ' '), ' strong_team ') and "
+                                        f"contains(@id, '_REH') and "  # 确保是主队按钮
                                         f".//tt[@class='text_ballhead' and text()='{ballhead_text}']]"
                                     )
                                 elif odds_type == 'Away':
-                                    # 查找不带有 'strong_team' 类的按钮
                                     odds_button_xpath = (
                                         f".//div[contains(@class, 'btn_hdpou_odd') and "
-                                        f"not(contains(concat(' ', normalize-space(@class), ' '), ' strong_team ')) and "
+                                        f"contains(@id, '_REC') and "  # 确保是客队按钮
                                         f".//tt[@class='text_ballhead' and text()='{ballhead_text}']]"
                                     )
+
                                 else:
                                     print(f"未知的 odds_type: {odds_type}")
                                     continue
@@ -942,11 +917,25 @@ def click_corner_odds(driver, alert):
             '-1.0': '-1', '-1.25': '-1/1.5', '-1.5': '-1.5', '-1.75': '-1.5/2',
             '-2.0': '-2', '-2.25': '-2/2.5', '-2.5': '-2.5', '-2.75': '-2.5/3',
             '-3.0': '-3', '-3.25': '-3/3.5', '-3.5': '-3.5', '-3.75': '-3.5/4',
-            '-4.0': '-4', '0.25': '0.25', '0.5': '0.5', '0.75': '0.5/1',
+            '-4.0': '-4',
+            '0.25': '0.25', '0.5': '0.5', '0.75': '0.5/1',
             '1.0': '1', '1.25': '1/1.5', '1.5': '1.5', '1.75': '1.5/2',
             '2.0': '2', '2.25': '2/2.5', '2.5': '2.5', '2.75': '2.5/3',
             '3.0': '3', '3.25': '3/3.5', '3.5': '3.5', '3.75': '3.5/4',
             '4.0': '4',
+            '4.25': '4/4.5', '4.5': '4.5', '4.75': '4.5/5',
+            '5.0': '5', '5.25': '5/5.5', '5.5': '5.5', '5.75': '5.5/6',
+            '6.0': '6', '6.25': '6/6.5', '6.5': '6.5', '6.75': '6.5/7',
+            '7.0': '7', '7.25': '7/7.5', '7.5': '7.5', '7.75': '7.5/8',
+            '8.0': '8', '8.25': '8/8.5', '8.5': '8.5', '8.75': '8.5/9',
+            '9.0': '9', '9.25': '9/9.5', '9.5': '9.5', '9.75': '9.5/10',
+            '10.0': '10',
+            '10.25': '10/10.5', '10.5': '10.5', '10.75': '10.5/11',
+            '11.0': '11', '11.25': '11/11.5', '11.5': '11.5', '11.75': '11.5/12',
+            '12.0': '12', '12.25': '12/12.5', '12.5': '12.5', '12.75': '12.5/13',
+            '13.0': '13', '13.25': '13/13.5', '13.5': '13.5', '13.75': '13.5/14',
+            '14.0': '14', '14.25': '14/14.5', '14.5': '14.5', '14.75': '14.5/15',
+            '15.0': '15'
         }
 
         # 定义盘口类型映射
