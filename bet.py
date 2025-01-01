@@ -122,7 +122,7 @@ def get_sequential_proxy():
         return proxy
 
 
-def get_new_proxy(current_proxy):
+def get_new_proxy():
     global current_proxy_index
     with status_lock:
         if current_proxy_index >= len(proxy_list):
