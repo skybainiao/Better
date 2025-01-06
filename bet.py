@@ -1,5 +1,3 @@
-import csv
-import json
 import random
 import threading
 import time
@@ -8,7 +6,6 @@ import warnings
 from queue import Queue, Empty
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from selenium.common.exceptions import (
     NoSuchElementException,
