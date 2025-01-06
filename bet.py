@@ -263,6 +263,7 @@ def navigate_to_football(driver):
 
 def run_scraper(account, market_type, scraper_id, proxy, alert_queue):
     username = account['username']
+    bet_amount = float(account.get('bet_amount', 50))  # 默认投注额为50
     stop_event = threading.Event()
     thread_control_events[scraper_id] = stop_event
 
@@ -298,9 +299,9 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue):
                         try:
                             match_type_in_alert = alert.get('match_type', '').strip().lower()
                             if match_type_in_alert == 'corner':
-                                click_corner_odds(driver, alert)
+                                click_corner_odds(driver, alert, scraper_id, bet_amount)  # 传递 scraper_id 和 bet_amount
                             elif match_type_in_alert == 'normal':
-                                click_odds(driver, alert)
+                                click_odds(driver, alert, scraper_id, bet_amount)  # 传递 scraper_id 和 bet_amount
                             else:
                                 print(f"未知的 match_type: {match_type_in_alert}")
                         except Exception as e:
@@ -353,12 +354,15 @@ def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
         thread_status[scraper_id] = "正在启动..."
         print(f"Scraper ID {scraper_id} 状态: 正在启动... (代理: {proxy})")
 
-    ### 新增：将 bet_interval 写入 scraper_info[scraper_id]
+    # 新增：将 bet_interval 和 bet_amount 写入 scraper_info[scraper_id]
     bet_interval = float(account.get('bet_interval', 0))
+    bet_amount = float(account.get('bet_amount', 50))  # 默认投注额为50
     with status_lock:
         scraper_info[scraper_id] = {
             "bet_interval": bet_interval,
-            "pause_until": 0  # 初始可立即接单
+            "pause_until": 0,  # 初始可立即接单
+            "bet_count": 0,  # 新增
+            "last_bet_info": ""  # 新增
         }
 
     # 以 (scraper_id, alert_queue) 方式存储
@@ -413,7 +417,7 @@ def map_alert_to_market_type(alert):
         return None
 
 
-def click_odds(driver, alert):
+def click_odds(driver, alert, scraper_id, bet_amount):
     try:
         # 1) 从 alert 中提取必要数据
         league_name = alert.get('league_name', '').strip()
@@ -630,6 +634,9 @@ def click_odds(driver, alert):
                                         f"点击成功: 联赛='{league_name}', 比赛='{home_team} vs {away_team}', "
                                         f"盘口='{market_section}', 比例='{ballhead_text}', 赔率='{odds_name}'"
                                     )
+                                    # 新增: 处理弹窗，并传递 scraper_id 和 bet_amount
+                                    handle_bet_popup(driver, scraper_id, bet_amount)
+
                                     clicked_ok = True
                                     break
                                 except Exception as e:
@@ -657,7 +664,7 @@ def click_odds(driver, alert):
         print(f"点击赔率按钮失败: {e}")
 
 
-def click_corner_odds(driver, alert):
+def click_corner_odds(driver, alert, scraper_id, bet_amount):
     try:
         # 提取并清洗 Alert 数据
         league_name = alert.get('league_name', '').strip()
@@ -915,6 +922,8 @@ def click_corner_odds(driver, alert):
                                             f"点击成功: 联赛='{league_name}', 比赛='{home_team} vs {away_team}', "
                                             f"盘口='{market_section}', 比例='{mapped_ratio}', 赔率名称='{odds_name}', 赔率值='{odds_value}'"
                                         )
+                                        # 新增: 处理弹窗，并传递 scraper_id 和 bet_amount
+                                        handle_bet_popup(driver, scraper_id, bet_amount)
                                         return
                                     except (ElementClickInterceptedException, NoSuchElementException,
                                             StaleElementReferenceException, ElementNotInteractableException) as e:
@@ -942,6 +951,99 @@ def click_corner_odds(driver, alert):
 
     except Exception as e:
         print(f"点击赔率按钮失败: {e}")
+
+
+def handle_bet_popup(driver, scraper_id, bet_amount):
+    try:
+        wait = WebDriverWait(driver, 15)  # 最多等待15秒
+
+        # 1. 等待弹窗出现
+        popup = wait.until(EC.visibility_of_element_located((By.ID, 'bet_show')))
+        print("弹窗已出现。")
+
+        # 2. 等待加载层 'info_loading' 消失
+        try:
+            wait.until(EC.invisibility_of_element_located((By.ID, 'info_loading')))
+            print("'info_loading' 已消失。")
+        except TimeoutException:
+            print("'info_loading' 未在指定时间内消失，继续尝试操作。")
+
+        # 3. 等待输入框可点击
+        try:
+            # 优先尝试 PC 端输入框
+            input_field = wait.until(EC.element_to_be_clickable((By.ID, 'bet_gold_pc')))
+            print("找到并等待 PC 端输入框可点击。")
+        except TimeoutException:
+            try:
+                # 如果 PC 端输入框不可用，尝试非 PC 端输入框
+                input_field = wait.until(EC.element_to_be_clickable((By.ID, 'bet_gold')))
+                print("找到并等待 非 PC 端输入框可点击。")
+            except TimeoutException:
+                print("弹窗中的输入框未找到或不可点击。")
+                return
+
+        # 4. 点击输入框
+        try:
+            input_field.click()
+            print("已点击弹窗中的输入框。")
+        except ElementNotInteractableException:
+            print("输入框不可点击。")
+            return
+
+        # 5. 输入 'bet_amount'
+        try:
+            bet_amount_int = int(float(bet_amount))  # 转换为整数
+            input_field.clear()
+            input_field.send_keys(str(bet_amount_int))
+            print(f"已在弹窗中输入 '{bet_amount_int}'。")
+        except ValueError:
+            print(f"投注额转换为整数失败: {bet_amount}")
+            return
+
+        # 可选：等待输入后页面更新（根据实际情况调整）
+        time.sleep(1)  # 等待1秒以确保页面更新
+
+        # 6. 提取并打印弹窗中的信息
+        try:
+            # 提取各个元素的文本
+            bet_menutype = popup.find_element(By.ID, 'bet_menutype').text.strip()
+            bet_score = popup.find_element(By.ID, 'bet_score').text.strip()
+            bet_league = popup.find_element(By.ID, 'bet_league').text.strip()
+            bet_team_h = popup.find_element(By.ID, 'bet_team_h').text.strip()
+            bet_team_c = popup.find_element(By.ID, 'bet_team_c').text.strip()
+            bet_chose_team = popup.find_element(By.ID, 'bet_chose_team').text.strip()
+            bet_chose_con = popup.find_element(By.ID, 'bet_chose_con').text.strip()
+            bet_ior = popup.find_element(By.ID, 'bet_ior').text.strip()
+            bet_wingold = popup.find_element(By.ID, 'bet_wingold').text.strip()
+
+            # 打印信息
+            print("=== 弹窗信息 ===")
+            print(f"菜单类型: {bet_menutype}")
+            print(f"比分: {bet_score}")
+            print(f"联赛: {bet_league}")
+            print(f"主队: {bet_team_h}")
+            print(f"客队: {bet_team_c}")
+            print(f"选择团队: {bet_chose_team}")
+            print(f"选择盘口: {bet_chose_con}")
+            print(f"赔率: {bet_ior}")
+            print(f"可赢金额: {bet_wingold}")
+            print("=================")
+
+            # 更新 scraper_info
+            with status_lock:
+                if scraper_id in scraper_info:
+                    scraper_info[scraper_id]["bet_count"] += 1
+                    scraper_info[scraper_id][
+                        "last_bet_info"] = f"菜单类型: {bet_menutype}, 比分: {bet_score}, 联赛: {bet_league}, 主队: {bet_team_h}, 客队: {bet_team_c}, 投注队伍: {bet_chose_team}, 选择盘口: {bet_chose_con}, 赔率: {bet_ior}, 可赢金额: {bet_wingold}"
+        except NoSuchElementException as e:
+            print(f"提取弹窗信息时发生错误: {e}")
+
+    except TimeoutException:
+        print("弹窗在超时时间内未出现。")
+    except NoSuchElementException:
+        print("弹窗中的输入框未找到。")
+    except Exception as e:
+        print(f"处理弹窗时发生错误: {e}")
 
 
 # Flask路由
@@ -1002,7 +1104,9 @@ def receive_data():
 @app.route('/start_scraper', methods=['POST'])
 def start_scraper_api():
     data = request.json
-    required_fields = ['username', 'market_type', 'min_odds', 'max_odds', 'max_bets', 'bet_interval']
+    print(f"接收到的数据: {data}")  # 添加这一行
+    required_fields = ['username', 'market_type', 'min_odds', 'max_odds', 'max_bets', 'bet_interval',
+                       'bet_amount']  # 新增 'bet_amount'
     if not all(field in data for field in required_fields):
         return jsonify({'status': 'error', 'message': '缺少必要字段'}), 400
 
@@ -1012,16 +1116,15 @@ def start_scraper_api():
     max_odds = data['max_odds']
     max_bets = data['max_bets']
     bet_interval = data['bet_interval']
-
-    if market_type not in MARKET_TYPES:
-        return jsonify({'status': 'error', 'message': f"无效的 market_type: {market_type}"}), 400
+    bet_amount = data['bet_amount']  # 新增
 
     account = {
         'username': username,
         'min_odds': min_odds,
         'max_odds': max_odds,
         'max_bets': max_bets,
-        'bet_interval': bet_interval
+        'bet_interval': bet_interval,
+        'bet_amount': bet_amount  # 新增
     }
 
     scraper_id = f"{username}_{market_type}_{int(time.time())}"
@@ -1089,8 +1192,15 @@ def get_status():
     statuses = []
     with status_lock:
         for s_id, st in thread_status.items():
-            statuses.append({'scraper_id': s_id, 'status': st})
+            info = scraper_info.get(s_id, {})
+            statuses.append({
+                'scraper_id': s_id,
+                'status': st,
+                'bet_count': info.get('bet_count', 0),  # 新增
+                'last_bet_info': info.get('last_bet_info', '')  # 新增
+            })
     return jsonify({'status': 'success', 'active_threads': statuses}), 200
+
 
 
 if __name__ == "__main__":
