@@ -20,6 +20,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 from seleniumwire import webdriver  # 使用 seleniumwire 的 webdriver
 from urllib3.exceptions import InsecureRequestWarning
 
+# 在你的 Flask 应用里，添加一个 before_request 钩子即可：
+allowed_ips = {"127.0.0.1", "160.25.20.134", "188.180.86.74"}
+
 # 用于跟踪抓取线程状态
 thread_status = {}
 status_lock = threading.Lock()
@@ -191,7 +194,7 @@ def init_driver(proxy=None):
 
 def login(driver, username):
     driver.get(BASE_URL)
-    wait = WebDriverWait(driver, 30)
+    wait = WebDriverWait(driver, 60)
     try:
         # 选择语言
         lang_field = wait.until(EC.visibility_of_element_located((By.ID, 'lang_en')))
@@ -245,7 +248,7 @@ def check_forbidden_page(driver):
 
 
 def navigate_to_football(driver):
-    wait = WebDriverWait(driver, 30)
+    wait = WebDriverWait(driver, 60)
     try:
         # 点击足球按钮
         football_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//div[span[text()="Soccer"]]')))
@@ -261,31 +264,36 @@ def navigate_to_football(driver):
         return False
 
 
-def run_scraper(account, market_type, scraper_id, proxy, alert_queue):
+def run_scraper(account, market_type, scraper_id, proxy, alert_queue, login_ip):
     username = account['username']
-    bet_amount = float(account.get('bet_amount', 50))  # 默认投注额为50
+    bet_amount = int(account.get('bet_amount', 50))  # 确保是整数
     stop_event = threading.Event()
     thread_control_events[scraper_id] = stop_event
 
     driver = None
     try:
+        # 使用 login_ip 作为 BASE_URL
+        global BASE_URL
+        original_base_url = BASE_URL
+        BASE_URL = f'https://{login_ip}/'
+
         driver = init_driver(proxy)
         time.sleep(2)
         with status_lock:
             thread_status[scraper_id] = "启动中"
-            print(f"Scraper ID {scraper_id} 状态: 启动中 (代理: {proxy})")
+            print(f"Scraper ID {scraper_id} 状态: 启动中 (BASE_URL: {BASE_URL})")
 
         if login(driver, username):
             if navigate_to_football(driver):
                 with status_lock:
                     thread_status[scraper_id] = "运行中"
-                    print(f"Scraper ID {scraper_id} 状态: 运行中 (代理: {proxy})")
+                    print(f"Scraper ID {scraper_id} 状态: 运行中 (BASE_URL: {BASE_URL})")
 
                 try:
                     button_id = MARKET_TYPES[market_type]
                     button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, button_id)))
                     button.click()
-                    print(f"{username} 已点击市场类型按钮: {market_type} (代理: {proxy})")
+                    print(f"{username} 已点击市场类型按钮: {market_type} (BASE_URL: {BASE_URL})")
 
                     time.sleep(3)
 
@@ -299,9 +307,9 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue):
                         try:
                             match_type_in_alert = alert.get('match_type', '').strip().lower()
                             if match_type_in_alert == 'corner':
-                                click_corner_odds(driver, alert, scraper_id, bet_amount)  # 传递 scraper_id 和 bet_amount
+                                click_corner_odds(driver, alert, scraper_id, bet_amount)
                             elif match_type_in_alert == 'normal':
-                                click_odds(driver, alert, scraper_id, bet_amount)  # 传递 scraper_id 和 bet_amount
+                                click_odds(driver, alert, scraper_id, bet_amount)
                             else:
                                 print(f"未知的 match_type: {match_type_in_alert}")
                         except Exception as e:
@@ -318,21 +326,24 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue):
             else:
                 with status_lock:
                     thread_status[scraper_id] = "已停止"
-                    print(f"Scraper ID {scraper_id} 状态: 已停止 (代理: {proxy})")
+                    print(f"Scraper ID {scraper_id} 状态: 已停止 (BASE_URL: {BASE_URL})")
         else:
             with status_lock:
                 thread_status[scraper_id] = "已停止"
-                print(f"Scraper ID {scraper_id} 状态: 已停止 (代理: {proxy})")
+                print(f"Scraper ID {scraper_id} 状态: 已停止 (BASE_URL: {BASE_URL})")
 
     except Exception as e:
-        print(f"{username} 运行时发生错误: {e} (代理: {proxy})")
+        print(f"{username} 运行时发生错误: {e} (BASE_URL: {BASE_URL})")
         traceback.print_exc()
         with status_lock:
             thread_status[scraper_id] = "已停止"
     finally:
         if driver:
             driver.quit()
-            print(f"{username} 已关闭浏览器 (代理: {proxy})")
+            print(f"{username} 已关闭浏览器 (BASE_URL: {BASE_URL})")
+
+        # 恢复原始 BASE_URL
+        BASE_URL = original_base_url
 
         with status_lock:
             if scraper_id in thread_control_events:
@@ -343,26 +354,26 @@ def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
     if not scraper_id:
         scraper_id = f"{account['username']}_{market_type}_{int(time.time())}"
 
-    if not proxy:
-        try:
-            proxy = get_sequential_proxy()
-        except Exception as e:
-            print(f"无法获取代理: {e}")
-            return
+    login_ip = account.get('login_ip')  # 获取登录 IP
+
+    if not login_ip:
+        print(f"账户 {account['username']} 没有指定登录 IP，无法启动抓取线程。")
+        return
 
     with status_lock:
         thread_status[scraper_id] = "正在启动..."
-        print(f"Scraper ID {scraper_id} 状态: 正在启动... (代理: {proxy})")
+        print(f"Scraper ID {scraper_id} 状态: 正在启动... (登录 IP: {login_ip})")
 
-    # 新增：将 bet_interval 和 bet_amount 写入 scraper_info[scraper_id]
-    bet_interval = float(account.get('bet_interval', 0))
-    bet_amount = float(account.get('bet_amount', 50))  # 默认投注额为50
+    # 新增：将 bet_interval、bet_amount 和 login_ip 写入 scraper_info[scraper_id]
+    bet_interval = float(account.get("bet_interval", 0))
+    bet_amount = float(account.get("bet_amount", 50))  # 默认投注额为50
     with status_lock:
         scraper_info[scraper_id] = {
             "bet_interval": bet_interval,
             "pause_until": 0,  # 初始可立即接单
             "bet_count": 0,  # 新增
-            "last_bet_info": ""  # 新增
+            "last_bet_info": "",  # 新增
+            "login_ip": login_ip  # 新增
         }
 
     # 以 (scraper_id, alert_queue) 方式存储
@@ -378,7 +389,7 @@ def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
 
     scraper_thread = threading.Thread(
         target=run_scraper,
-        args=(account, market_type, scraper_id, proxy, alert_queue),
+        args=(account, market_type, scraper_id, proxy, alert_queue, login_ip),  # 传递 login_ip
         daemon=True
     )
     scraper_thread.start()
@@ -955,95 +966,149 @@ def click_corner_odds(driver, alert, scraper_id, bet_amount):
 
 def handle_bet_popup(driver, scraper_id, bet_amount):
     try:
-        wait = WebDriverWait(driver, 15)  # 最多等待15秒
+        wait = WebDriverWait(driver, 15)
 
-        # 1. 等待弹窗出现
+        # 1. 等待初始弹窗出现（输入金额的弹窗）
         popup = wait.until(EC.visibility_of_element_located((By.ID, 'bet_show')))
-        print("弹窗已出现。")
+        print("初始弹窗已出现。")
 
-        # 2. 等待加载层 'info_loading' 消失
+        # 等待加载层 'info_loading' 消失
         try:
             wait.until(EC.invisibility_of_element_located((By.ID, 'info_loading')))
-            print("'info_loading' 已消失。")
         except TimeoutException:
-            print("'info_loading' 未在指定时间内消失，继续尝试操作。")
+            pass  # 若未消失也继续
 
-        # 3. 等待输入框可点击
+        # 找到输入框 (PC优先)
         try:
-            # 优先尝试 PC 端输入框
             input_field = wait.until(EC.element_to_be_clickable((By.ID, 'bet_gold_pc')))
-            print("找到并等待 PC 端输入框可点击。")
         except TimeoutException:
             try:
-                # 如果 PC 端输入框不可用，尝试非 PC 端输入框
                 input_field = wait.until(EC.element_to_be_clickable((By.ID, 'bet_gold')))
-                print("找到并等待 非 PC 端输入框可点击。")
             except TimeoutException:
-                print("弹窗中的输入框未找到或不可点击。")
+                print("未找到可用输入框，放弃。")
                 return
 
-        # 4. 点击输入框
+        # 点击并输入金额
+        input_field.click()
+        input_field.clear()
+        bet_amount_int = int(float(bet_amount))
+        input_field.send_keys(str(bet_amount_int))
+        print(f"已在初始弹窗中输入金额: {bet_amount_int}")
+
+        # 2. 找到“PLACE BET”按钮并点击
         try:
-            input_field.click()
-            print("已点击弹窗中的输入框。")
-        except ElementNotInteractableException:
-            print("输入框不可点击。")
+            place_bet_button = wait.until(EC.element_to_be_clickable((By.ID, 'order_bet')))
+            print("找到 PLACE BET 按钮。")
+        except TimeoutException:
+            print("找不到 PLACE BET 按钮，放弃。")
             return
 
-        # 5. 输入 'bet_amount'
+        place_bet_button.click()
+        print("已点击 PLACE BET 按钮，等待跳转到投注回执弹窗...")
+
+        # 3. 等待出现“receipt”弹窗
+        #   用 bet_show 且 class 里包含 receipt
         try:
-            bet_amount_int = int(float(bet_amount))  # 转换为整数
-            input_field.clear()
-            input_field.send_keys(str(bet_amount_int))
-            print(f"已在弹窗中输入 '{bet_amount_int}'。")
-        except ValueError:
-            print(f"投注额转换为整数失败: {bet_amount}")
+            receipt_popup = wait.until(
+                EC.visibility_of_element_located(
+                    (By.XPATH, "//div[@id='bet_show' and contains(@class,'receipt')]")
+                )
+            )
+            print("已出现投注回执弹窗 (receipt)。")
+        except TimeoutException:
+            print("投注回执弹窗未出现，放弃。")
             return
 
-        # 可选：等待输入后页面更新（根据实际情况调整）
-        time.sleep(1)  # 等待1秒以确保页面更新
-
-        # 6. 提取并打印弹窗中的信息
+        # 4. 在回执弹窗中提取信息
         try:
-            # 提取各个元素的文本
-            bet_menutype = popup.find_element(By.ID, 'bet_menutype').text.strip()
-            bet_score = popup.find_element(By.ID, 'bet_score').text.strip()
-            bet_league = popup.find_element(By.ID, 'bet_league').text.strip()
-            bet_team_h = popup.find_element(By.ID, 'bet_team_h').text.strip()
-            bet_team_c = popup.find_element(By.ID, 'bet_team_c').text.strip()
-            bet_chose_team = popup.find_element(By.ID, 'bet_chose_team').text.strip()
-            bet_chose_con = popup.find_element(By.ID, 'bet_chose_con').text.strip()
-            bet_ior = popup.find_element(By.ID, 'bet_ior').text.strip()
-            bet_wingold = popup.find_element(By.ID, 'bet_wingold').text.strip()
+            menutype = receipt_popup.find_element(By.ID, 'bet_finish_menutype').text.strip()
+            score = receipt_popup.find_element(By.ID, 'bet_finish_score').text.strip()
+            league = receipt_popup.find_element(By.ID, 'bet_finish_league').text.strip()
+            team_h = receipt_popup.find_element(By.ID, 'bet_finish_team_h').text.strip()
+            team_c = receipt_popup.find_element(By.ID, 'bet_finish_team_c').text.strip()
+            chose_team = receipt_popup.find_element(By.ID, 'bet_finish_chose_team').text.strip()
+            chose_con = receipt_popup.find_element(By.ID, 'bet_finish_chose_con').text.strip()
+            ior = receipt_popup.find_element(By.ID, 'bet_finish_ior').text.strip()
+            stake = receipt_popup.find_element(By.ID, 'bet_finish_gold').text.strip()
+            win_gold = receipt_popup.find_element(By.ID, 'bet_finish_win_gold').text.strip()
+            tid = receipt_popup.find_element(By.ID, 'bet_finish_tid').text.strip()
+            status_div = receipt_popup.find_element(By.ID, 'bet_finish_dg')
+            status_text = status_div.text.strip() if status_div else ""
 
-            # 打印信息
-            print("=== 弹窗信息 ===")
-            print(f"菜单类型: {bet_menutype}")
-            print(f"比分: {bet_score}")
-            print(f"联赛: {bet_league}")
-            print(f"主队: {bet_team_h}")
-            print(f"客队: {bet_team_c}")
-            print(f"选择团队: {bet_chose_team}")
-            print(f"选择盘口: {bet_chose_con}")
-            print(f"赔率: {bet_ior}")
-            print(f"可赢金额: {bet_wingold}")
-            print("=================")
+            print("=== 投注回执信息 ===")
+            print(f"菜单类型: {menutype}")
+            print(f"比分: {score}")
+            print(f"联赛: {league}")
+            print(f"主队: {team_h}")
+            print(f"客队: {team_c}")
+            print(f"投注队伍: {chose_team}")
+            print(f"选择盘口: {chose_con}")
+            print(f"赔率: {ior}")
+            print(f"投注金额: {stake}")
+            print(f"可赢金额: {win_gold}")
+            print(f"注单号: {tid}")
+            print(f"单据状态: {status_text}")
+            print("==================")
+        except NoSuchElementException:
+            print("提取回执信息时出现问题。")
 
-            # 更新 scraper_info
-            with status_lock:
-                if scraper_id in scraper_info:
-                    scraper_info[scraper_id]["bet_count"] += 1
-                    scraper_info[scraper_id][
-                        "last_bet_info"] = f"菜单类型: {bet_menutype}, 比分: {bet_score}, 联赛: {bet_league}, 主队: {bet_team_h}, 客队: {bet_team_c}, 投注队伍: {bet_chose_team}, 选择盘口: {bet_chose_con}, 赔率: {bet_ior}, 可赢金额: {bet_wingold}"
-        except NoSuchElementException as e:
-            print(f"提取弹窗信息时发生错误: {e}")
+        # 5. 点击“OK”按钮关闭弹窗
+        try:
+            ok_button = WebDriverWait(receipt_popup, 10).until(
+                EC.element_to_be_clickable((By.ID, 'finishBtn_show'))
+            )
+            ok_button.click()
+            print("已点击 OK 按钮，关闭回执弹窗。")
+        except TimeoutException:
+            print("未找到 OK 按钮，或点击失败。")
 
-    except TimeoutException:
-        print("弹窗在超时时间内未出现。")
-    except NoSuchElementException:
-        print("弹窗中的输入框未找到。")
+        # 6. 最后才更新 bet_count
+        with status_lock:
+            if scraper_id in scraper_info:
+                scraper_info[scraper_id]["bet_count"] += 1
+                # 记录最后一次投注信息
+                last_info = (
+                    f"注单号: {tid}, 盘口: {chose_con}, 赔率: {ior}, 投注: {stake}, "
+                    f"可赢: {win_gold}, 状态: {status_text}"
+                )
+                scraper_info[scraper_id]["last_bet_info"] = last_info
+
     except Exception as e:
-        print(f"处理弹窗时发生错误: {e}")
+        print(f"处理投注流程时发生错误: {e}")
+
+
+def check_malay_odds(old_val, new_val, min_odds, max_odds):
+    """
+    判断马来盘赔率是否符合要求：
+      - 如果某个值是正数 => 它必须 >= min_odds
+      - 如果某个值是负数 => 它必须 <= max_odds
+      - 如果一个正一个负 => 正的必须>=min_odds，负的必须<=max_odds
+      - 只要有任意值不满足 => return False
+    """
+    # old_val 检查
+    if old_val >= 0:
+        if old_val < min_odds:
+            return False
+    else:  # old_val < 0
+        if old_val > max_odds:
+            return False
+
+    # new_val 检查
+    if new_val >= 0:
+        if new_val < min_odds:
+            return False
+    else:  # new_val < 0
+        if new_val > max_odds:
+            return False
+
+    return True
+
+
+@app.before_request
+def limit_remote_addr():
+    client_ip = request.remote_addr
+    if client_ip not in allowed_ips:
+        return jsonify({'status': 'error', 'message': 'Forbidden IP'}), 403
 
 
 # Flask路由
@@ -1055,48 +1120,67 @@ def receive_data():
 
     market_type = map_alert_to_market_type(data)
     if not market_type or market_type not in MARKET_TYPES:
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 无法映射 market_type for alert: {data}")
         return jsonify({'status': 'error', 'message': 'Invalid or unmapped market_type'}), 400
+
+    # 从 alert 中取旧值 / 新值
+    old_val = float(data.get('old_value', 0))
+    new_val = float(data.get('new_value', 0))
 
     with status_lock:
         queue_list = market_type_to_alert_queues.get(market_type, [])
         if not queue_list:
-            # 无可用Scraper
             return jsonify({'status': 'error', 'message': f"No scrapers for {market_type}"}), 200
 
-        now = time.time()
         n = len(queue_list)
         valid_assigned = False
+        now = time.time()
 
-        # 尝试按轮询找到可用Scraper
         for _ in range(n):
+            # 轮询获取下一个 Scraper
             index = market_type_to_next_queue_index[market_type]
             scraper_id, alert_q = queue_list[index]
-
-            # 下一个轮询索引
             market_type_to_next_queue_index[market_type] = (index + 1) % n
 
-            # 判断此scraper是否仍在暂停
             info = scraper_info.get(scraper_id, {})
             pause_until = info.get("pause_until", 0)
-            if now < pause_until:
-                # 说明还在暂停期 => 换下一个
+            max_bets = info.get("max_bets", 0)
+            current_count = info.get("bet_count", 0)
+
+            # 1) 判断是否已达 max_bets
+            if max_bets > 0 and current_count >= max_bets:
+                # 跳过此账号，尝试下一个
                 continue
 
-            # 如果可用 => 分配alert
-            alert_q.put(data)
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Alert 分配给 {scraper_id}")
+            # 2) 判断是否处于暂停期
+            if now < pause_until:
+                # 说明此账号还在暂停期
+                continue
 
-            # 让该scraper进入暂停 => 设置新的 pause_until
-            bet_intv = info.get("bet_interval", 0)
-            scraper_info[scraper_id]["pause_until"] = time.time() + bet_intv
+            # 3) 读取当前账号的 min_odds / max_odds
+            min_odds = float(info.get("min_odds", 0.2))
+            max_odds = float(info.get("max_odds", -0.1))
+
+            # 4) 检查赔率 (若不符合则继续尝试下一个)
+            if not check_malay_odds(old_val, new_val, min_odds, max_odds):
+                print(
+                    f"[{scraper_id}] 赔率不符合 => old={old_val}, new={new_val}, min_odds={min_odds}, max_odds={max_odds}")
+                continue
+
+            # 如果符合 => 分配该 alert
+            alert_q.put(data)
+            scraper_info[scraper_id]["pause_until"] = now + info.get("bet_interval", 0)
+
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Alert 分配给 {scraper_id}")
             valid_assigned = True
             break
 
         if not valid_assigned:
-            # 所有Scraper都在暂停 or 不可用 => 本条 alert 作废
-            print(f"所有账号都在暂停期或不可用, alert作废 => {data}")
-            return jsonify({'status': 'error', 'message': 'All scrapers paused or unavailable; alert discarded.'}), 200
+            # 若所有 Scraper 要么达 max_bets、要么在暂停期、或赔率不符 => 此条 alert 作废
+            print(f"所有账号不可用(满bets/暂停/赔率不符), alert作废 => {data}")
+            return jsonify({
+                'status': 'error',
+                'message': 'All scrapers unavailable (bets/full or paused or odds mismatch); alert discarded.'
+            }), 200
 
     return jsonify({'status': 'success', 'message': 'Data received'}), 200
 
@@ -1106,7 +1190,7 @@ def start_scraper_api():
     data = request.json
     print(f"接收到的数据: {data}")  # 添加这一行
     required_fields = ['username', 'market_type', 'min_odds', 'max_odds', 'max_bets', 'bet_interval',
-                       'bet_amount']  # 新增 'bet_amount'
+                       'bet_amount', 'login_ip']  # 新增 'login_ip'
     if not all(field in data for field in required_fields):
         return jsonify({'status': 'error', 'message': '缺少必要字段'}), 400
 
@@ -1116,7 +1200,8 @@ def start_scraper_api():
     max_odds = data['max_odds']
     max_bets = data['max_bets']
     bet_interval = data['bet_interval']
-    bet_amount = data['bet_amount']  # 新增
+    bet_amount = data['bet_amount']  # 已有
+    login_ip = data['login_ip']  # 新增
 
     account = {
         'username': username,
@@ -1124,7 +1209,8 @@ def start_scraper_api():
         'max_odds': max_odds,
         'max_bets': max_bets,
         'bet_interval': bet_interval,
-        'bet_amount': bet_amount  # 新增
+        'bet_amount': bet_amount,
+        'login_ip': login_ip  # 新增
     }
 
     scraper_id = f"{username}_{market_type}_{int(time.time())}"
@@ -1140,7 +1226,7 @@ def start_scraper_api():
 
 @app.route('/stop_scraper', methods=['POST'])
 def stop_scraper():
-    data = request.json
+    data = request.get_json()
     if 'scraper_id' not in data:
         return jsonify({'status': 'error', 'message': '缺少 scraper_id'}), 400
 
@@ -1149,9 +1235,9 @@ def stop_scraper():
         if scraper_id not in thread_status:
             return jsonify({'status': 'error', 'message': f"未找到 scraper_id: {scraper_id}"}), 404
 
-    # 停止线程
+    # 停止线程(但不清理数据)
     if scraper_id in thread_control_events:
-        thread_control_events[scraper_id].set()
+        thread_control_events[scraper_id].set()  # 触发停止事件
         with status_lock:
             del thread_control_events[scraper_id]
         print(f"Scraper ID {scraper_id} 已停止")
@@ -1165,7 +1251,7 @@ def stop_scraper():
 
 @app.route('/delete_scraper', methods=['POST'])
 def delete_scraper():
-    data = request.json
+    data = request.get_json()
     if 'scraper_id' not in data:
         return jsonify({'status': 'error', 'message': '缺少 scraper_id'}), 400
 
@@ -1174,15 +1260,31 @@ def delete_scraper():
         if scraper_id not in thread_status:
             return jsonify({'status': 'error', 'message': f"未找到 scraper_id: {scraper_id}"}), 404
 
-    # 如果还在运行，先停
+    # 1) 先停止线程（如果仍在运行）
     if scraper_id in thread_control_events:
         thread_control_events[scraper_id].set()
         del thread_control_events[scraper_id]
         print(f"Scraper ID {scraper_id} 已停止")
 
-    # 从 thread_status 中移除
+    # 2) 从 market_type_to_alert_queues 中删除 (scraper_id, alert_queue)，避免接收新的 alert
+    #    先遍历所有 market_type，再移除对应 tuple
+    for mtype, queue_list in market_type_to_alert_queues.items():
+        new_list = []
+        for (sid, alert_q) in queue_list:
+            if sid != scraper_id:
+                new_list.append((sid, alert_q))
+            else:
+                print(f"从 {mtype} 中移除队列: {scraper_id}")
+        market_type_to_alert_queues[mtype] = new_list
+
+    # 3) 删除 scraper_info
+    if scraper_id in scraper_info:
+        del scraper_info[scraper_id]
+        print(f"已清理 scraper_info 中的数据: {scraper_id}")
+
+    # 4) 删除 thread_status
     del thread_status[scraper_id]
-    print(f"Scraper ID {scraper_id} 已删除")
+    print(f"Scraper ID {scraper_id} 已删除所有数据")
 
     return jsonify({'status': 'success', 'message': f"已删除抓取线程: {scraper_id}"}), 200
 
@@ -1193,14 +1295,16 @@ def get_status():
     with status_lock:
         for s_id, st in thread_status.items():
             info = scraper_info.get(s_id, {})
+            login_ip = info.get("login_ip", "")  # 从 scraper_info 获取 login_ip
+
             statuses.append({
                 'scraper_id': s_id,
                 'status': st,
-                'bet_count': info.get('bet_count', 0),  # 新增
-                'last_bet_info': info.get('last_bet_info', '')  # 新增
+                'bet_count': info.get('bet_count', 0),
+                'last_bet_info': info.get('last_bet_info', ''),
+                'login_ip': login_ip  # 新增
             })
     return jsonify({'status': 'success', 'active_threads': statuses}), 200
-
 
 
 if __name__ == "__main__":
