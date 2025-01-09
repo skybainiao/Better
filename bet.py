@@ -19,7 +19,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from seleniumwire import webdriver  # 使用 seleniumwire 的 webdriver
 from urllib3.exceptions import InsecureRequestWarning
-
+import requests
 # 在你的 Flask 应用里，添加一个 before_request 钩子即可：
 allowed_ips = {"127.0.0.1", "160.25.20.134", "188.180.86.74"}
 
@@ -1052,7 +1052,38 @@ def handle_bet_popup(driver, scraper_id, bet_amount):
         except NoSuchElementException:
             print("提取回执信息时出现问题。")
 
-        # 5. 点击“OK”按钮关闭弹窗
+        # 5. 异步发送到 Java 服务器
+        def send_to_java():
+            post_url = "http://localhost:8080/api/store-data"  # 更新为你的Java服务器URL
+            with status_lock:
+                username = scraper_info[scraper_id].get("username", "unknown")
+            data = {
+                "menutype": menutype,
+                "score": score,
+                "league": league,
+                "homeTeam": team_h,
+                "awayTeam": team_c,
+                "choseTeam": chose_team,
+                "choseCon": chose_con,
+                "ior": ior,
+                "stake": stake,
+                "winGold": win_gold,
+                "tid": tid,
+                "statusText": status_text,
+                "username": username
+            }
+            try:
+                response = requests.post(post_url, json=data, timeout=5)
+                if response.status_code == 200:
+                    print("成功发送数据到Java服务器。")
+                else:
+                    print(f"发送到Java服务器失败，状态码: {response.status_code}")
+            except Exception as e:
+                print(f"发送到Java服务器时出错: {e}")
+
+        threading.Thread(target=send_to_java, daemon=True).start()
+
+        # 6. 点击“OK”按钮关闭弹窗
         try:
             ok_button = WebDriverWait(receipt_popup, 10).until(
                 EC.element_to_be_clickable((By.ID, 'finishBtn_show'))
@@ -1062,7 +1093,7 @@ def handle_bet_popup(driver, scraper_id, bet_amount):
         except TimeoutException:
             print("未找到 OK 按钮，或点击失败。")
 
-        # 6. 最后才更新 bet_count
+        # 7. 最后才更新 bet_count
         with status_lock:
             if scraper_id in scraper_info:
                 scraper_info[scraper_id]["bet_count"] += 1
