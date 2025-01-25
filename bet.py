@@ -27,8 +27,8 @@ from selenium.webdriver.common.by import By
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # 在你的 Flask 应用里，添加一个 before_request 钩子即可：
-allowed_ips = {"127.0.0.1", "160.25.20.134", "188.180.86.74"}
-
+allowed_ips = {"127.0.0.1", "188.180.86.74"}
+#"160.25.20.134",
 # 用于跟踪抓取线程状态
 thread_status = {}
 status_lock = threading.Lock()
@@ -712,17 +712,20 @@ def click_odds(driver, alert, scraper_id, bet_amount):
 
 def click_odds_half(driver, alert, scraper_id, bet_amount):
     """
-    点击半场赔率的函数：
+    点击半场赔率的函数（方法2: 通过检查是否已出现 hdpou_1h 判断是否需要点击 1H 按钮）：
     1) 从Alert获取联赛、主客队、盘口信息
     2) 找到比赛行(若折叠则展开)
-    3) 点击右侧1H按钮 => 切换到半场
+    3) 如果页面未出现半场数据(div.form_lebet_hdpou.hdpou_1h)，则点击右侧1H按钮 => 等待半场切换
     4) 构造半场盘口xpath => 点击对应赔率
-    5) 最后处理投注弹窗
+    5) 处理投注弹窗(如需)
     """
     from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    import time
 
     try:
-        # 1) 提取Alert信息
+        # 1) 提取 Alert 信息
         league_name = alert.get('league_name', '').strip()
         home_team = alert.get('home_team', '').strip()
         away_team = alert.get('away_team', '').strip()
@@ -774,7 +777,7 @@ def click_odds_half(driver, alert, scraper_id, bet_amount):
 
         # 4) 根据 bet_type + odds_name，确定半场按钮后缀
         if bet_type == 'SPREAD':
-            # "Handicap 1H" => 半场让球: '_HREH' / '_HREC'
+            # "Handicap 1H" => '_HREH' 或 '_HREC'
             if odds_name == 'HomeOdds':
                 half_odds_id = '_HREH'
             elif odds_name == 'AwayOdds':
@@ -783,7 +786,7 @@ def click_odds_half(driver, alert, scraper_id, bet_amount):
                 print(f"未知 odds_name: {odds_name}")
                 return
         elif bet_type == 'TOTAL_POINTS':
-            # "Goals O/U 1H" => '_HROUC' / '_HROUH'
+            # "Goals O/U 1H" => '_HROUC' 或 '_HROUH'
             if odds_name == 'OverOdds':
                 half_odds_id = '_HROUC'
             elif odds_name == 'UnderOdds':
@@ -801,7 +804,7 @@ def click_odds_half(driver, alert, scraper_id, bet_amount):
             return
         ballhead_text = ratio_mapping[ratio]
 
-        # 若为让球，则补 + 号；若为大小球，则去掉末尾.0
+        # 若为让球 => 可能补 + 号；大小球 => 去掉末尾.0
         if bet_type == 'SPREAD':
             if ratio.startswith('-'):
                 pass
@@ -834,7 +837,7 @@ def click_odds_half(driver, alert, scraper_id, bet_amount):
         # 7) 遍历联赛
         for league_element in league_elements:
             try:
-                # 找到其所有比赛 (ID形如 "game_9052206") / class包含 "box_lebet"
+                # 找到其所有比赛
                 game_xpath = ".//following-sibling::div[starts-with(@id, 'game_') and contains(@class, 'box_lebet')]"
                 game_elements = league_element.find_elements(By.XPATH, game_xpath)
                 print(f"联赛 '{league_name}' 下找到 {len(game_elements)} 场比赛")
@@ -844,7 +847,7 @@ def click_odds_half(driver, alert, scraper_id, bet_amount):
                         raw_game_id = game_element.get_attribute("id")  # e.g. "game_9052206"
                         style_value = (game_element.get_attribute("style") or "").replace(" ", "").lower()
 
-                        # 若折叠 => 点击联赛标题展开
+                        # 若折叠 => 展开
                         if "display:none" in style_value:
                             print(f"比赛 {idx} 折叠，点击联赛展开 -> {league_name}")
                             try:
@@ -853,12 +856,14 @@ def click_odds_half(driver, alert, scraper_id, bet_amount):
                             except Exception as e:
                                 print(f"点击联赛展开时出错: {e}")
 
-                        # 主客队文本
+                        # 提取主客队
                         game_home = game_element.find_element(
-                            By.XPATH, ".//div[contains(@class, 'teamH')]/span[contains(@class, 'text_team')]"
+                            By.XPATH,
+                            ".//div[contains(@class, 'teamH')]/span[contains(@class, 'text_team')]"
                         ).text.strip()
                         game_away = game_element.find_element(
-                            By.XPATH, ".//div[contains(@class, 'teamC')]/span[contains(@class, 'text_team')]"
+                            By.XPATH,
+                            ".//div[contains(@class, 'teamC')]/span[contains(@class, 'text_team')]"
                         ).text.strip()
                         print(f"检查比赛 {idx}: {game_home} vs {game_away}")
 
@@ -866,57 +871,51 @@ def click_odds_half(driver, alert, scraper_id, bet_amount):
                             print(f"找到目标比赛: {home_team} vs {away_team} (联赛: {league_name})")
                             found_match = True
 
-                            # =========== 点击 1H 按钮 ============
+                            # ======= 先检查是否已经是半场模式: .hdpou_1h =======
+                            # 若已出现 => 不再点击1H
+                            already_half = len(game_element.find_elements(
+                                By.CSS_SELECTOR, "div.form_lebet_hdpou.hdpou_1h"
+                            )) > 0
 
-                            # raw_game_id 如 "game_9052206" => 截去 "game_"
-                            numeric_id = raw_game_id[5:] if raw_game_id.startswith("game_") else raw_game_id
-                            right_info_id = f"right_info_{numeric_id}"
-
-                            try:
-                                # 定位右侧按钮区
-                                right_info_el = driver.find_element(By.ID, right_info_id)
-                                # 定位 <div class="rnou_btn rnou_btn_1H">
-                                half_btn_div = right_info_el.find_element(
-                                    By.CSS_SELECTOR, "div.rnou_btn.rnou_btn_1H"
-                                )
-                                # 若按钮是off/none则无法点击
-                                btn_class = half_btn_div.get_attribute("class") or ""
-                                if "off" in btn_class or "none" in btn_class:
-                                    print(f"[1H] 半场按钮处于off/none状态，无法点击 => {numeric_id}")
-                                    return
-
-                                # 滚动并使用 selenium原生点击
-                                from selenium.webdriver.support import expected_conditions as EC
-                                from selenium.webdriver.common.by import By
-                                from selenium.webdriver.support.ui import WebDriverWait
-
-                                driver.execute_script("arguments[0].scrollIntoView(true);", half_btn_div)
-
+                            if already_half:
+                                print("[1H] 已是半场模式 (hdpou_1h 已出现)，无需点击1H按钮")
+                            else:
+                                # =========== 点击 1H 按钮 ============
+                                numeric_id = raw_game_id[5:] if raw_game_id.startswith("game_") else raw_game_id
+                                right_info_id = f"right_info_{numeric_id}"
                                 try:
+                                    right_info_el = driver.find_element(By.ID, right_info_id)
+                                    half_btn_div = right_info_el.find_element(
+                                        By.CSS_SELECTOR, "div.rnou_btn.rnou_btn_1H"
+                                    )
+                                    # off/none => 无法点击
+                                    btn_class = half_btn_div.get_attribute("class") or ""
+                                    if "off" in btn_class or "none" in btn_class:
+                                        print(f"[1H] 半场按钮处于off/none状态 => 无法点击 => {numeric_id}")
+                                        return
+
+                                    driver.execute_script("arguments[0].scrollIntoView(true);", half_btn_div)
                                     WebDriverWait(driver, 5).until(
                                         EC.element_to_be_clickable(half_btn_div)
                                     ).click()
                                     print("[1H] 已点击1H按钮 => 等待切换到半场...")
+
+                                    # 等待 .hdpou_1h 出现
+                                    try:
+                                        WebDriverWait(driver, 5).until(
+                                            lambda d: len(d.find_elements(
+                                                By.XPATH,
+                                                f"//div[@id='{raw_game_id}']//div[contains(@class,'hdpou_1h')]"
+                                            )) > 0
+                                        )
+                                        print("[1H] 检测到 hdpou_1h => 半场切换完成")
+                                    except TimeoutException:
+                                        print("[1H] 等待 .hdpou_1h 超时，可能切换失败")
+                                        return
+
                                 except Exception as e:
-                                    print(f"[1H] 点击1H按钮失败: {e}")
+                                    print(f"[1H] 定位/点击 1H按钮时出错: {e}")
                                     return
-
-                                # 等待页面出现 hdpou_1h
-                                try:
-                                    WebDriverWait(driver, 5).until(
-                                        lambda d: len(d.find_elements(
-                                            By.XPATH,
-                                            f"//div[@id='{raw_game_id}']//div[contains(@class,'hdpou_1h')]"
-                                        )) > 0
-                                    )
-                                    print("[1H] 成功检测到 hdpou_1h => 半场切换完成")
-                                except TimeoutException:
-                                    print("[1H] 等待 hdpou_1h 超时，可能未切换成功")
-                                    return
-
-                            except Exception as e:
-                                print(f"[1H] 定位/点击 1H按钮时出错: {e}")
-                                return
 
                             # ============ 点击半场赔率按钮 =============
                             match_xpath = f"//div[@id='{raw_game_id}']"
@@ -942,9 +941,8 @@ def click_odds_half(driver, alert, scraper_id, bet_amount):
                                     ).click()
 
                                     print(f"[1H] 点击成功 => 比例={ballhead_text}, odds={odds_name}")
-                                    # 如果需调用弹窗函数:
-                                    # handle_bet_popup(driver, scraper_id, bet_amount)
-
+                                    # 如需处理弹窗:
+                                    handle_bet_popup(driver, scraper_id, bet_amount)
                                     clicked_ok = True
                                     break
                                 except Exception as e:
@@ -1234,7 +1232,7 @@ def click_corner_odds(driver, alert, scraper_id, bet_amount):
                                     print(f"点击成功: 联赛='{league_name}', 比赛='{home_team} vs {away_team}', "
                                           f"盘口='{market_section}', 比例='{mapped_ratio}', 赔率='{odds_name}'")
                                     # 如果需要调用投注弹窗:
-                                    # handle_bet_popup(driver, scraper_id, bet_amount)
+                                    handle_bet_popup(driver, scraper_id, bet_amount)
 
                                     clicked_ok = True
                                     break
@@ -1267,6 +1265,8 @@ def click_corner_odds(driver, alert, scraper_id, bet_amount):
 
 
 def handle_bet_popup(driver, scraper_id, bet_amount):
+    print("弹窗")
+    '''
     try:
         wait = WebDriverWait(driver, 15)
 
@@ -1424,7 +1424,7 @@ def handle_bet_popup(driver, scraper_id, bet_amount):
         print(f"处理投注流程时发生错误: {e}")
     finally:
         close_bet_popup(driver)
-
+'''
 
 def check_malay_odds(old_val, new_val, min_odds, max_odds):
     """
@@ -1545,6 +1545,7 @@ def limit_remote_addr():
 block_under_odds = False
 block_under_lock = threading.Lock()
 
+
 # 在 Flask 路由部分新增以下路由
 @app.route('/toggle_block_under', methods=['POST'])
 def toggle_block_under():
@@ -1563,7 +1564,7 @@ def receive_data():
     if not data:
         return jsonify({'status': 'error', 'message': 'No JSON data received'}), 400
 
-    # ============== 新增：屏蔽小球逻辑 ==============
+    # ============== 修改后的屏蔽小球逻辑 ==============
     with block_under_lock:
         if block_under_odds:
             # 1. 获取市场类型
@@ -1571,27 +1572,29 @@ def receive_data():
 
             # 2. 判断是否为大小球盘口（基于 MARKET_TYPES 定义）
             is_overunder = any(
-                'OverUnder' in mt_key  # 检查 market_type 是否包含 OverUnder
-                for mt_key in MARKET_TYPES  # 遍历 MARKET_TYPES 的键
-                if mt_key == market_type  # 精确匹配当前 market_type
+                'OverUnder' in mt_key
+                for mt_key in MARKET_TYPES
+                if mt_key == market_type
             )
 
             # 3. 判断是否为 Under 类型
-            is_under = data.get('odds_name') == 'UnderOdds'  # 严格匹配
+            is_under = data.get('odds_name') == 'UnderOdds'
 
-            # 4. 拦截逻辑
+            # 4. 修改逻辑：如果符合条件，则将 UnderOdds 修改为 OverOdds
             if is_overunder and is_under:
+                original_odds_name = data['odds_name']
+                data['odds_name'] = 'OverOdds'  # 将 UnderOdds 修改为 OverOdds
                 log_msg = (
-                    f"[屏蔽开关] 拦截 Under 信号 - "
+                    f"[屏蔽开关] 将 UnderOdds 修改为 OverOdds - "
                     f"联赛: {data.get('league_name', '未知')} | "
                     f"主队: {data.get('home_team', '未知')} | "
                     f"客队: {data.get('away_team', '未知')} | "
                     f"盘口类型: {market_type} | "
-                    f"赔率类型: {data.get('odds_name', '未知')} | "
+                    f"赔率类型: {original_odds_name} -> {data.get('odds_name', '未知')} | "
                     f"原始数据: {json.dumps(data, ensure_ascii=False)}"
                 )
                 print(log_msg)
-                return jsonify({'status': 'error', 'message': 'Under signal blocked'}), 200
+                # 不返回错误，继续后续的分配逻辑
 
     # ============== 原有逻辑 ==============
     market_type = map_alert_to_market_type(data)
@@ -1599,8 +1602,11 @@ def receive_data():
         return jsonify({'status': 'error', 'message': 'Invalid or unmapped market_type'}), 400
 
     # 从 alert 中取旧值 / 新值
-    old_val = float(data.get('old_value', 0))
-    new_val = float(data.get('new_value', 0))
+    try:
+        old_val = float(data.get('old_value', 0))
+        new_val = float(data.get('new_value', 0))
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Invalid value format'}), 400
 
     with status_lock:
         queue_list = market_type_to_alert_queues.get(market_type, [])
