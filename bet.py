@@ -1,4 +1,5 @@
 import json
+import logging
 import random
 import threading
 import time
@@ -7,6 +8,7 @@ import warnings
 from queue import Queue, Empty
 from urllib.parse import urlparse
 
+import requests
 from flask import Flask, request, jsonify
 from selenium.common.exceptions import (
     NoSuchElementException,
@@ -20,9 +22,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from seleniumwire import webdriver  # 使用 seleniumwire 的 webdriver
 from urllib3.exceptions import InsecureRequestWarning
-import requests
-import logging
-from selenium.webdriver.common.by import By
 
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
@@ -95,6 +94,9 @@ scraper_queue = Queue()
 
 scraper_info = {}
 
+# 全局条件变量
+scheduler_condition = threading.Condition()
+
 
 def scheduler():
     while True:
@@ -102,10 +104,15 @@ def scheduler():
         if task is None:
             break  # 退出调度器
         account, market_type, scraper_id = task
-        # 启动抓取线程
-        start_scraper_thread(account, market_type, scraper_id)
-        # 随机等待3到5秒
-        time.sleep(random.uniform(10, 15))
+
+        with scheduler_condition:
+            # 等待前一个线程状态为“运行中”或“已停止”
+            while any(status not in ["运行中", "已停止"] for status in thread_status.values()):
+                scheduler_condition.wait()
+
+            # 启动抓取线程
+            start_scraper_thread(account, market_type, scraper_id)
+
         scraper_queue.task_done()
 
 
@@ -221,7 +228,7 @@ def login(driver, username):
         # 3) 点击登录按钮
         login_button = wait.until(EC.element_to_be_clickable((By.ID, 'btn_login')))
         login_button.click()
-        time.sleep(20)  # 等页面渲染一会儿，以便弹窗出现
+        time.sleep(10)  # 等页面渲染一会儿，以便弹窗出现
 
         # 4) 多次重试点击“NO”按钮
         #    若弹窗没有出现或点不到，就循环重试几次
@@ -287,7 +294,7 @@ def navigate_to_football(driver):
 
 def run_scraper(account, market_type, scraper_id, proxy, alert_queue, login_ip):
     username = account['username']
-    bet_amount = int(account.get('bet_amount', 50))  # 确保是整数
+    bet_amount = int(account.get('bet_amount', 50))
     stop_event = threading.Event()
     thread_control_events[scraper_id] = stop_event
 
@@ -306,11 +313,18 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue, login_ip):
 
         if login(driver, username):
             if navigate_to_football(driver):
-                # 启动后台弹窗监控线程
+
+                # === 在这里启动状态监控线程 ===
+                status_monitor_thread = threading.Thread(
+                    target=monitor_page_status,
+                    args=(driver, stop_event, scraper_id, market_type),
+                    daemon=True
+                )
+                status_monitor_thread.start()
+
                 monitor_thread = threading.Thread(target=popup_monitor, args=(driver, stop_event), daemon=True)
                 monitor_thread.start()
 
-                # 启动随机滚动线程
                 scroll_thread = threading.Thread(target=random_scroll, args=(driver, stop_event), daemon=True)
                 scroll_thread.start()
 
@@ -318,13 +332,15 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue, login_ip):
                     thread_status[scraper_id] = "运行中"
                     print(f"Scraper ID {scraper_id} 状态: 运行中 (BASE_URL: {BASE_URL})")
 
+                # 通知调度器可以启动下一个账号
+                with scheduler_condition:
+                    scheduler_condition.notify_all()
+
                 try:
                     button_id = MARKET_TYPES[market_type]
                     button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, button_id)))
                     button.click()
                     print(f"{username} 已点击市场类型按钮: {market_type} (BASE_URL: {BASE_URL})")
-
-                    time.sleep(3)
 
                     while not stop_event.is_set():
                         try:
@@ -332,18 +348,21 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue, login_ip):
                         except Empty:
                             continue
 
+                        # --- 新增：如果此scraper当前不允许接Alert，则跳过 ---
+                        with status_lock:
+                            if not scraper_info[scraper_id].get("allow_alert", True):
+                                alert_queue.task_done()
+                                continue
+
                         print(f"接收到Alert: {alert}")
                         try:
                             match_type_in_alert = alert.get('match_type', '').strip().lower()
-                            # 对于 normal 类型，根据 bet_type_name 判断全场或半场
                             if match_type_in_alert == 'corner':
                                 click_corner_odds(driver, alert, scraper_id, bet_amount)
                             elif match_type_in_alert == 'normal':
                                 if '1H' in alert.get('bet_type_name', ''):
-                                    # 半场模式，调用 click_odds_half
                                     click_odds_half(driver, alert, scraper_id, bet_amount)
                                 else:
-                                    # 全场模式，调用原来的 click_odds
                                     click_odds(driver, alert, scraper_id, bet_amount)
                             else:
                                 print(f"未知的 match_type: {match_type_in_alert}")
@@ -352,7 +371,6 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue, login_ip):
                             traceback.print_exc()
 
                         alert_queue.task_done()
-
 
                 except Exception as e:
                     print(f"{username} 处理市场类型按钮时出错: {e}")
@@ -377,16 +395,22 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue, login_ip):
         if driver:
             driver.quit()
             print(f"{username} 已关闭浏览器 (BASE_URL: {BASE_URL})")
-        # 恢复原始 BASE_URL
         BASE_URL = original_base_url
         with status_lock:
             if scraper_id in thread_control_events:
                 del thread_control_events[scraper_id]
+            thread_status[scraper_id] = "已停止"
+
+        # 通知调度器可以启动下一个账号
+        with scheduler_condition:
+            scheduler_condition.notify_all()
 
 
+# 修改 scraper_id 的生成方式
 def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
     if not scraper_id:
-        scraper_id = f"{account['username']}_{market_type}_{int(time.time())}"
+        # 使用固定的 scraper_id
+        scraper_id = f"{account['username']}_{market_type}"
 
     login_ip = account.get('login_ip')  # 获取登录 IP
 
@@ -398,18 +422,22 @@ def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
         thread_status[scraper_id] = "正在启动..."
         print(f"Scraper ID {scraper_id} 状态: 正在启动... (登录 IP: {login_ip})")
 
-    # 新增：将 bet_interval、bet_amount 和 login_ip 写入 scraper_info[scraper_id]
-    bet_interval = float(account.get("bet_interval", 0))
-    bet_amount = float(account.get("bet_amount", 50))  # 默认投注额为50
+    # 确保 scraper_info 已经初始化
     with status_lock:
-        scraper_info[scraper_id] = {
-            "username": account['username'],
-            "bet_interval": bet_interval,
-            "pause_until": 0,  # 初始可立即接单
-            "bet_count": 0,  # 新增
-            "last_bet_info": "",  # 新增
-            "login_ip": login_ip  # 新增
-        }
+        if scraper_id not in scraper_info:
+            bet_interval = float(account.get("bet_interval", 0))
+            bet_amount = float(account.get("bet_amount", 50))  # 默认投注额为50
+            # 若为角球盘口，加一个 allow_alert 标记
+            is_corner = "Corners" in market_type  # 简单判断
+            scraper_info[scraper_id] = {
+                "username": account['username'],
+                "bet_interval": bet_interval,
+                "pause_until": 0,  # 初始可立即接单
+                "bet_count": 0,  # 新增
+                "last_bet_info": "",  # 新增
+                "login_ip": login_ip,  # 新增
+                "allow_alert": True if is_corner else True  # 可以根据需要初始化
+            }
 
     # 以 (scraper_id, alert_queue) 方式存储
     alert_queue = Queue()
@@ -659,6 +687,14 @@ def click_odds(driver, alert, scraper_id, bet_amount):
                                         f"and .//tt[@class='text_ballou' and text()='U'] "
                                         f"and .//tt[@class='text_ballhead' and text()='{ballhead_text}']]"
                                     )
+
+                            # 在点击赔率按钮之前添加弹窗检测
+                            try:
+                                driver.find_element(By.ID, 'bet_show')
+                                close_bet_popup(driver)
+                                print("已关闭存在的投注弹窗。")
+                            except NoSuchElementException:
+                                pass  # 如果没有弹窗，则继续
 
                             # 7.4 多次重试点击
                             clicked_ok = False
@@ -925,6 +961,14 @@ def click_odds_half(driver, alert, scraper_id, bet_amount):
                                 f"and .//tt[@class='text_ballhead' and text()='{ballhead_text}']]"
                             )
 
+                            # 在点击赔率按钮之前添加弹窗检测
+                            try:
+                                driver.find_element(By.ID, 'bet_show')
+                                close_bet_popup(driver)
+                                print("已关闭存在的投注弹窗。")
+                            except NoSuchElementException:
+                                pass  # 如果没有弹窗，则继续
+
                             clicked_ok = False
                             for attempt in range(3):
                                 try:
@@ -971,40 +1015,21 @@ def click_odds_half(driver, alert, scraper_id, bet_amount):
 
 def click_corner_odds(driver, alert, scraper_id, bet_amount):
     """
-    点击角球让球 / 角球大小球赔率的函数（只处理让分和大小球）。
-    逻辑步骤：
-      1. 从 alert 解析联赛名、主客队、bet_type_name (SPREAD / TOTAL_POINTS / OVERUNDER  + 全场/半场)、
-         odds_name (HomeOdds / AwayOdds / OverOdds / UnderOdds)。
-      2. 根据全场/半场 & 让球/大小球，确定对应的 'market_section' 和 'odds_type'。
-      3. 自动查找对应联赛元素，若比赛是折叠则先点击联赛标题展开。
-      4. 匹配比赛主客队后，定位相应的「box_lebet_odd」区域，再根据映射 ratio 找到按钮并点击。
+    修正后的角球点击逻辑，依据真实网页结构进行 XPath 定位：
+      - 大类： 角球容器 => 父级 div[class*='bet_type_cn']
+      - 子类： box_lebet_odd => <div class="head_lebet"><span>HDP</span> or <span>O/U</span>, [<tt>1H</tt>]>
+      - 按钮 ID: 全场 => ROUC/ROUH/REH/REC, 半场 => HROUC/HROUH/HREH/HREC
     """
-
-    import time
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.common.action_chains import ActionChains
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import (
-        NoSuchElementException,
-        StaleElementReferenceException,
-        ElementClickInterceptedException,
-        ElementNotInteractableException,
-        TimeoutException
-    )
-
     try:
-        # ============ 1) 从 Alert 中提取并预处理 ============
         league_name = alert.get('league_name', '').strip()
         home_team = alert.get('home_team', '').strip()
         away_team = alert.get('away_team', '').strip()
-        bet_type_name = alert.get('bet_type_name', '').strip().upper()  # 大写化方便解析
-        odds_name = alert.get('odds_name', '').strip()  # 直接和 "HomeOdds"/"AwayOdds"/"OverOdds"/"UnderOdds" 比较
+        bet_type_name = alert.get('bet_type_name', '').strip()
+        odds_name = alert.get('odds_name', '').strip()
 
-        # ============ 2) 角球的 ratio 映射表 ============
+        # 角球 ratio 映射（示例）
         ratio_mapping = {
-            '0.0': '0',
-            '-0.25': '-0/0.5', '-0.5': '-0.5', '-0.75': '-0.5/1',
+            '0.0': '0', '-0.25': '-0/0.5', '-0.5': '-0.5', '-0.75': '-0.5/1',
             '-1.0': '-1', '-1.25': '-1/1.5', '-1.5': '-1.5', '-1.75': '-1.5/2',
             '-2.0': '-2', '-2.25': '-2/2.5', '-2.5': '-2.5', '-2.75': '-2.5/3',
             '-3.0': '-3', '-3.25': '-3/3.5', '-3.5': '-3.5', '-3.75': '-3.5/4',
@@ -1028,245 +1053,173 @@ def click_corner_odds(driver, alert, scraper_id, bet_amount):
             '15.0': '15'
         }
 
-        # ============ 3) 解析全场/半场 ============
-        period = 'FT'
-        if ('1H' in bet_type_name) or ('1H' in alert.get('period', '')):
+        # period：全场('FT') or 半场('1H')
+        if '1H' in bet_type_name:
             period = '1H'
-
-        # ============ 4) 判断是让球 (SPREAD) / 大小球 (TOTAL_POINTS/OVERUNDER) ============
-
-        # 让分
-        if 'SPREAD' in bet_type_name:
-            if period == 'FT':
-                market_section = 'Corner Kick Handicap'  # 全场角球让球
-            else:
-                market_section = 'Half-time Corner Kick Handicap'  # 半场角球让球
-
-            # 根据 odds_name 精确匹配
-            if odds_name == 'HomeOdds':
-                odds_type = 'REH'  # e.g. "bet_xxx_REH"
-            elif odds_name == 'AwayOdds':
-                odds_type = 'REC'
-            else:
-                print(f"未知的 odds_name: {odds_name} 对于让分盘口 {market_section}")
-                return
-
-        # 大小球
-        elif ('TOTAL_POINTS' in bet_type_name) or ('OVERUNDER' in bet_type_name):
-            if period == 'FT':
-                market_section = 'Corner Kick Goals O/U'  # 全场角球大小球
-            else:
-                market_section = 'Half-time Corner Kick Goals O/U'  # 半场角球大小球
-
-            if odds_name == 'OverOdds':
-                odds_type = 'ROUC'
-            elif odds_name == 'UnderOdds':
-                odds_type = 'ROUH'
-            else:
-                print(f"未知 odds_name: {odds_name} 对于角球大小球盘口 {market_section}")
-                return
         else:
-            print(f"不处理其他角球盘口类型: {bet_type_name}")
-            return
+            period = 'FT'
 
-        # ============ 5) 解析 ratio 并处理映射 ============
-
-        parts = bet_type_name.split('_')
-        if len(parts) < 2:
-            print(f"无法解析 bet_type_name: {bet_type_name}")
-            return
-        ratio = parts[-1]  # 取末尾
-        mapped_ratio = ratio_mapping.get(ratio)
-        if not mapped_ratio:
-            print(f"未定义的 ratio 映射: {bet_type_name} {ratio}")
-            return
-
-        # 若为让分 => 可能需要加 '+'；若为大小球 => 去除末尾 .0
-        if 'SPREAD' in bet_type_name:
-            if ratio.startswith('-'):
-                pass  # 已带 '-'
-            elif ratio == '0.0':
-                pass
-            else:
-                # 给 mapped_ratio 补 "+"
-                if not mapped_ratio.startswith('-') and mapped_ratio != '0':
-                    mapped_ratio = f"+{mapped_ratio}"
+        # 确定让球或大小球
+        # SPREAD => 让球(HDP)，TOTAL_POINTS => 大小球(O/U)
+        if bet_type_name.startswith('SPREAD'):
+            is_handicap = True
         else:
-            # 大小球 => 去除末尾 .0
-            if mapped_ratio.endswith('.0'):
-                mapped_ratio = mapped_ratio[:-2]
+            is_handicap = False  # TOTAL_POINTS or OVERUNDER => 大小球
 
-        # 处理类似 "3.0" 这种如果末尾还有 .0
-        if '.' in mapped_ratio and '/' not in mapped_ratio and mapped_ratio.endswith('.0'):
-            mapped_ratio = mapped_ratio[:-2]
+        # 从 bet_type_name 获取 ratio (末尾部分)，例如 "SPREAD_FT_-0.5" => ratio = "-0.5"
+        # 具体解析因项目而异，下例仅演示
+        ratio = bet_type_name.split('_')[-1]
+        mapped_ratio = ratio_mapping.get(ratio, ratio)
 
-        # ============ 6) 查找联赛元素 ============
+        # 根据 period + is_handicap, 推断按钮ID的后缀
+        # 全场让球 => REH/REC, 全场大小 => ROUC/ROUH
+        # 半场让球 => HREH/HREC, 半场大小 => HROUC/HROUH
+        if period == 'FT':
+            if is_handicap:
+                # REH / REC
+                if odds_name == 'HomeOdds':
+                    target_id_part = 'REH'
+                else:
+                    target_id_part = 'REC'
+                main_tag = 'HDP'
+                half_tag = ''  # FT不出现<tt>1H</tt>
+            else:
+                # ROUC / ROUH
+                if odds_name == 'OverOdds':
+                    target_id_part = 'ROUC'
+                else:
+                    target_id_part = 'ROUH'
+                main_tag = 'O/U'
+                half_tag = ''
+        else:
+            # period == '1H'
+            if is_handicap:
+                # HREH / HREC
+                if odds_name == 'HomeOdds':
+                    target_id_part = 'HREH'
+                else:
+                    target_id_part = 'HREC'
+                main_tag = 'HDP'
+                half_tag = '1H'
+            else:
+                # HROUC / HROUH
+                if odds_name == 'OverOdds':
+                    target_id_part = 'HROUC'
+                else:
+                    target_id_part = 'HROUH'
+                main_tag = 'O/U'
+                half_tag = '1H'
 
+        # 1) 查找联赛
         league_xpath = (
             f"//div[contains(@class, 'btn_title_le') "
-            f"and .//tt[@id='lea_name' and text()='{league_name}']]"
+            f" and .//tt[@id='lea_name' and text()='{league_name}']]"
         )
         league_elements = driver.find_elements(By.XPATH, league_xpath)
-        print(f"联赛 '{league_name}' 找到 {len(league_elements)} 个元素(可能折叠/展开)")
-
         if not league_elements:
-            print(f"未找到联赛: {league_name}")
+            print(f"[Corner] 未找到联赛: {league_name}")
             return
 
         found_match = False
 
-        # ============ 7) 遍历联赛、自动展开比赛、匹配主客队、点击赔率 ============
-
-        for league_index, league_element in enumerate(league_elements, start=1):
-            try:
-                print(f"处理联赛元素 {league_index}: {league_name}")
-                game_xpath = ".//following-sibling::div[starts-with(@id, 'game_') and contains(@class, 'box_lebet')]"
-                game_elements = league_element.find_elements(By.XPATH, game_xpath)
-                print(f"联赛 '{league_name}' 下找到 {len(game_elements)} 场比赛")
-
-                for game_index, game_element in enumerate(game_elements, start=1):
+        for league_el in league_elements:
+            # 找到紧随其后的比赛
+            game_xpath = ".//following-sibling::div[starts-with(@id, 'game_') and contains(@class, 'box_lebet')]"
+            games = league_el.find_elements(By.XPATH, game_xpath)
+            for g_el in games:
+                style_val = (g_el.get_attribute("style") or "").lower()
+                if "display:none" in style_val:
+                    # 若折叠，则尝试点击联赛展开
                     try:
-                        # 若折叠 => 点击联赛名称展开
-                        style_value = (game_element.get_attribute("style") or "").replace(" ", "").lower()
-                        if "display:none" in style_value:
-                            print(f"比赛 {game_index} 折叠，尝试展开联赛 -> {league_name}")
-                            try:
-                                driver.execute_script("arguments[0].scrollIntoView(true);", league_element)
-                                league_element.click()
-                                time.sleep(1)  # 等待渲染
-                            except Exception as e:
-                                print(f"点击联赛展开时出错: {e}")
+                        league_el.click()
+                    except:
+                        pass
 
-                        # 获取主客队
-                        game_home_team = game_element.find_element(
-                            By.XPATH, ".//div[contains(@class, 'teamH')]/span[contains(@class, 'text_team')]"
-                        ).text.strip()
-                        game_away_team = game_element.find_element(
-                            By.XPATH, ".//div[contains(@class, 'teamC')]/span[contains(@class, 'text_team')]"
-                        ).text.strip()
+                # 判断主客队
+                try:
+                    game_home = g_el.find_element(By.XPATH, ".//div[contains(@class,'teamH')]/span").text.strip()
+                    game_away = g_el.find_element(By.XPATH, ".//div[contains(@class,'teamC')]/span").text.strip()
+                except:
+                    continue
 
-                        print(f"检查比赛 {game_index}: {game_home_team} vs {game_away_team}")
+                if game_home == home_team and game_away == away_team:
+                    print(f"[Corner] 匹配到比赛: {home_team} vs {away_team}")
+                    found_match = True
 
-                        if (game_home_team == home_team) and (game_away_team == away_team):
-                            print(f"找到目标角球比赛 => {home_team} vs {away_team} (联赛: {league_name})")
-                            found_match = True
+                    # 2) 在此比赛下查找对应 box_lebet_odd
+                    #   注意: 角球盘 often 在 parent div class="box_lebet bet_type_cn"
+                    #   但每个具体盘口是 .box_lebet_odd
+                    #   其中 <div class="head_lebet"><tt>1H</tt><span>O/U</span></div> (或 HDP)
+                    #   所以我们匹配 half_tag + main_tag
+                    #   half_tag 为空则不加, 不为空则必须出现 <tt>1H</tt>
+                    if half_tag:
+                        bet_section_xpath = (
+                            f".//div[contains(@class, 'box_lebet_odd')]"
+                            f"[.//div[contains(@class,'head_lebet')]"
+                            f"[./tt[text()='{half_tag}'] and ./span[text()='{main_tag}']]]"
+                        )
+                    else:
+                        bet_section_xpath = (
+                            f".//div[contains(@class, 'box_lebet_odd')]"
+                            f"[.//div[contains(@class,'head_lebet')]"
+                            f"[./span[text()='{main_tag}']]]"
+                        )
 
-                            # 构建查找 box_lebet_odd 的 xpath：
-                            #    里面要能匹配到 "market_section" 这种标题,如 "O/U", "HDP", "1H O/U"等
-                            # 注意：角球页面结构多为
-                            #   <div class="box_lebet_odd">
-                            #     <div class="head_lebet"><span>O/U</span></div>
-                            #     <div id="bet_xxx_ROUC"...
-                            #   </div>
-                            #
-                            # 如果是半场 => <div class="head_lebet"><tt>1H</tt><span>O/U</span></div>
-                            #
-                            # 这里我们检查 span 或 tt 里有没有 market_section
-                            # 可能需分全场/半场：判断 market_section 里是否包含 "1H".
+                    try:
+                        bet_section_el = g_el.find_element(By.XPATH, bet_section_xpath)
+                    except NoSuchElementException:
+                        print(f"[Corner] 未找到对应盘口区: half_tag={half_tag}, main_tag={main_tag}")
+                        return
 
-                            if period == 'FT':
-                                # 全场 => 直接检查 <span>xxx</span> == "O/U" 或 "HDP"
-                                bet_section_xpath = (
-                                    f".//div[contains(@class, 'box_lebet_odd')]"
-                                    f"[.//div[contains(@class, 'head_lebet')]"
-                                    f"[./span[text()='{market_section}']]]"
-                                )
-                            else:
-                                # 半场 =>  <div class="head_lebet"><tt>1H</tt><span>O/U</span></div>
-                                splitted = market_section.split()  # e.g. ["Half-time","Corner","Kick","Goals","O/U"]? =>  Actually we set "Half-time Corner Kick Goals O/U"? This might be a bit messy,
-                                #
-                                # For simplicity we define a short approach:
-                                if market_section == 'Half-time Corner Kick Handicap':
-                                    # => <tt>1H</tt> + <span>HDP</span>
-                                    half_tag = '1H'
-                                    main_tag = 'HDP'
-                                elif market_section == 'Half-time Corner Kick Goals O/U':
-                                    # => <tt>1H</tt> + <span>O/U</span>
-                                    half_tag = '1H'
-                                    main_tag = 'O/U'
-                                else:
-                                    # fallback
-                                    half_tag, main_tag = '1H', 'HDP'  # or O/U
+                    # 3) 点击具体赔率按钮 => 根据 target_id_part, mapped_ratio
+                    #   例如: //div[@id='bet_xxx_ROUC'][.//tt[text()='{mapped_ratio}']]
+                    odds_btn_xpath = (
+                        f".//div[contains(@class,'btn_lebet_odd') and contains(@id,'{target_id_part}')]"
+                        f"[.//tt[@class='text_ballhead' and text()='{mapped_ratio}']]"
+                    )
+                    odds_btns = bet_section_el.find_elements(By.XPATH, odds_btn_xpath)
+                    if not odds_btns:
+                        print(f"[Corner] 找不到赔率按钮 => ratio={mapped_ratio}, id_part={target_id_part}")
+                        return
 
-                                bet_section_xpath = (
-                                    f".//div[contains(@class, 'box_lebet_odd')]"
-                                    f"[.//div[contains(@class, 'head_lebet')]"
-                                    f"[./tt[text()='{half_tag}'] and ./span[text()='{main_tag}']]]"
-                                )
+                    # 在点击赔率按钮之前添加弹窗检测
+                    try:
+                        driver.find_element(By.ID, 'bet_show')
+                        close_bet_popup(driver)
+                        print("已关闭存在的投注弹窗。")
+                    except NoSuchElementException:
+                        pass  # 如果没有弹窗，则继续
 
-                            try:
-                                bet_section_element = game_element.find_element(By.XPATH, bet_section_xpath)
-                                print(f"找到角球盘口区域 => {market_section}")
-                            except NoSuchElementException:
-                                print(f"未找到此角球盘口: {market_section} in 比赛 {home_team} vs {away_team}")
-                                continue
+                    clicked = False
+                    for attempt in range(3):
+                        try:
+                            btn = odds_btns[0]
+                            driver.execute_script("arguments[0].scrollIntoView(true);", btn)
+                            WebDriverWait(driver, 5).until(EC.element_to_be_clickable(btn)).click()
 
-                            # 若区域含lock则跳过
-                            if 'lock' in bet_section_element.get_attribute('class'):
-                                print(f"盘口 {market_section} 已被锁定，无法点击。")
-                                continue
+                            print(f"[Corner] 点击成功 => ratio={mapped_ratio}, odds_name={odds_name}")
+                            # 处理弹窗
+                            handle_bet_popup(driver, scraper_id, bet_amount)
+                            clicked = True
+                            break
+                        except Exception as e:
+                            print(f"[Corner] 第{attempt + 1}次点击失败: {e}")
+                            time.sleep(1)
 
-                            # 构建赔率按钮 xpath
-                            odds_button_xpath = (
-                                f".//div[contains(@class, 'btn_lebet_odd') "
-                                f"and contains(@id, '{odds_type}') "
-                                f"and .//tt[contains(@class, 'text_ballhead') and text()='{mapped_ratio}']]"
-                            )
-
-                            clicked_ok = False
-                            for attempt in range(3):
-                                try:
-                                    odds_buttons = bet_section_element.find_elements(By.XPATH, odds_button_xpath)
-                                    if not odds_buttons:
-                                        print(
-                                            f"[{attempt + 1}/3] 未找到赔率按钮 => ratio={mapped_ratio}, type={odds_type}")
-                                        time.sleep(0.5)
-                                        continue
-
-                                    odds_button = odds_buttons[0]
-                                    driver.execute_script("arguments[0].scrollIntoView(true);", odds_button)
-                                    WebDriverWait(driver, 5).until(
-                                        EC.element_to_be_clickable(odds_button)
-                                    ).click()
-
-                                    print(f"点击成功: 联赛='{league_name}', 比赛='{home_team} vs {away_team}', "
-                                          f"盘口='{market_section}', 比例='{mapped_ratio}', 赔率='{odds_name}'")
-                                    # 如果需要调用投注弹窗:
-                                    handle_bet_popup(driver, scraper_id, bet_amount)
-
-                                    clicked_ok = True
-                                    break
-                                except (ElementClickInterceptedException,
-                                        NoSuchElementException,
-                                        StaleElementReferenceException,
-                                        ElementNotInteractableException) as e:
-                                    print(f"点击失败({attempt + 1}/3): {e}")
-                                    time.sleep(1)
-
-                            if clicked_ok:
-                                return  # 成功点击后立即return
-                            else:
-                                print(f"连续3次点击仍失败 => ratio={mapped_ratio}, odds_name={odds_name}")
-                                return
-
-                    except (StaleElementReferenceException, NoSuchElementException) as e:
-                        print(f"比赛 {game_index} 解析时出错: {e}")
-                        continue
-
-            except StaleElementReferenceException as e:
-                print(f"联赛元素失效: {e}")
-                continue
-
+                    if clicked:
+                        return
+                    else:
+                        print(f"[Corner] 多次点击失败 => ratio={mapped_ratio}, id_part={target_id_part}")
+                        return
         if not found_match:
-            print(f"在联赛 '{league_name}' 中未找到比赛: {home_team} vs {away_team}")
+            print(f"[Corner] 联赛 {league_name} 下未匹配到比赛 {home_team} vs {away_team}")
 
     except Exception as e:
-        print(f"点击赔率按钮失败: {e}")
+        print(f"[Corner] click_corner_odds 出错: {e}")
 
 
 def handle_bet_popup(driver, scraper_id, bet_amount):
-    print("弹窗")
-    '''
+    #print("弹窗")
     try:
         wait = WebDriverWait(driver, 15)
 
@@ -1424,7 +1377,7 @@ def handle_bet_popup(driver, scraper_id, bet_amount):
         print(f"处理投注流程时发生错误: {e}")
     finally:
         close_bet_popup(driver)
-'''
+
 
 def check_malay_odds(old_val, new_val, min_odds, max_odds):
     """
@@ -1532,6 +1485,80 @@ def close_bet_popup(driver):
         print("[ClosePopup] 未检测到投注弹窗关闭按钮。")
     except Exception as e:
         print(f"[ClosePopup] 关闭投注弹窗时出错: {e}")
+
+
+def monitor_page_status(driver, stop_event, scraper_id, market_type):
+    while not stop_event.is_set():
+        time.sleep(120)  # 每2分钟检测一次
+
+        found_soccer = element_exists(driver, "//span[text()='Soccer']")
+        button_id = MARKET_TYPES[market_type]  # 正常盘口 => tab_rnou, 角球盘口 => tab_cn
+        found_tab = element_exists(driver, f"//*[@id='{button_id}']")
+
+        # 如果Soccer和按钮都消失 => 重登(保持bet_count等)
+        if not found_soccer and not found_tab:
+            re_login(driver, scraper_id, market_type)
+        else:
+            # 如果是角球账号: Soccer存在且tab_cn不见 => 暂停收Alert；反之如再次出现 => 恢复
+            if "Corners" in market_type:
+                if found_soccer and not found_tab:
+                    with status_lock:
+                        scraper_info[scraper_id]["allow_alert"] = False
+                        print(f"[{scraper_id}] tab_cn消失, 角球账号暂停接收Alert.")
+                elif found_soccer and found_tab:
+                    # 若之前allow_alert是False => 恢复
+                    with status_lock:
+                        if not scraper_info[scraper_id]["allow_alert"]:
+                            # 先点击一下tab_cn按钮
+                            try:
+                                WebDriverWait(driver, 5).until(
+                                    EC.element_to_be_clickable((By.ID, button_id))
+                                ).click()
+                            except:
+                                pass
+                            scraper_info[scraper_id]["allow_alert"] = True
+                            print(f"[{scraper_id}] 角球账号检测到tab_cn重新出现, 恢复接收Alert.")
+
+
+def element_exists(driver, xpath):
+    try:
+        driver.find_element(By.XPATH, xpath)
+        return True
+    except NoSuchElementException:
+        return False
+
+
+def re_login(driver, scraper_id, market_type):
+    """
+    刷新并重新登录该账号，保留bet_count等信息。
+    """
+    with status_lock:
+        # 先保存旧的bet_count
+        old_bet_count = scraper_info[scraper_id].get("bet_count", 0)
+
+    # 刷新页面或直接get
+    driver.get(BASE_URL)
+    username = scraper_info[scraper_id]["username"]
+
+    if login(driver, username):
+        if navigate_to_football(driver):
+            # 再点击对应market_type按钮
+            try:
+                button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.ID, MARKET_TYPES[market_type]))
+                )
+                button.click()
+            except:
+                pass
+
+            # 恢复 bet_count
+            with status_lock:
+                scraper_info[scraper_id]["bet_count"] = old_bet_count
+            print(f"[{scraper_id}] 已重新登录并恢复 bet_count={old_bet_count}。")
+        else:
+            print(f"[{scraper_id}] 重新登录后无法 navigate_to_football。")
+    else:
+        print(f"[{scraper_id}] re_login 失败。")
 
 
 @app.before_request
