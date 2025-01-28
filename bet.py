@@ -1568,21 +1568,6 @@ def limit_remote_addr():
         return jsonify({'status': 'error', 'message': 'Forbidden IP'}), 403
 
 
-# 在文件顶部添加全局变量
-block_under_odds = False
-block_under_lock = threading.Lock()
-
-
-# 在 Flask 路由部分新增以下路由
-@app.route('/toggle_block_under', methods=['POST'])
-def toggle_block_under():
-    global block_under_odds
-    data = request.get_json()
-    with block_under_lock:
-        block_under_odds = data.get('block_under', False)
-        print(f"[屏蔽开关] 当前状态: {'已开启' if block_under_odds else '已关闭'}")
-    return jsonify({'status': 'success', 'block_under': block_under_odds})
-
 
 # Flask路由
 @app.route('/receive_data', methods=['POST'])
@@ -1590,38 +1575,6 @@ def receive_data():
     data = request.get_json()
     if not data:
         return jsonify({'status': 'error', 'message': 'No JSON data received'}), 400
-
-    # ============== 修改后的屏蔽小球逻辑 ==============
-    with block_under_lock:
-        if block_under_odds:
-            # 1. 获取市场类型
-            market_type = map_alert_to_market_type(data)
-
-            # 2. 判断是否为大小球盘口（基于 MARKET_TYPES 定义）
-            is_overunder = any(
-                'OverUnder' in mt_key
-                for mt_key in MARKET_TYPES
-                if mt_key == market_type
-            )
-
-            # 3. 判断是否为 Under 类型
-            is_under = data.get('odds_name') == 'UnderOdds'
-
-            # 4. 修改逻辑：如果符合条件，则将 UnderOdds 修改为 OverOdds
-            if is_overunder and is_under:
-                original_odds_name = data['odds_name']
-                data['odds_name'] = 'OverOdds'  # 将 UnderOdds 修改为 OverOdds
-                log_msg = (
-                    f"[屏蔽开关] 将 UnderOdds 修改为 OverOdds - "
-                    f"联赛: {data.get('league_name', '未知')} | "
-                    f"主队: {data.get('home_team', '未知')} | "
-                    f"客队: {data.get('away_team', '未知')} | "
-                    f"盘口类型: {market_type} | "
-                    f"赔率类型: {original_odds_name} -> {data.get('odds_name', '未知')} | "
-                    f"原始数据: {json.dumps(data, ensure_ascii=False)}"
-                )
-                print(log_msg)
-                # 不返回错误，继续后续的分配逻辑
 
     # ============== 原有逻辑 ==============
     market_type = map_alert_to_market_type(data)
