@@ -1576,28 +1576,24 @@ def re_login(driver, scraper_id, market_type):
 
 def modify_alert_for_category(alert):
     """
-    修改特定类别的 alert 信息。
-    只有当 match_type 为 'normal' 且类别状态为指定值时，才进行修改。
-    支持多类别和多状态，便于未来扩展。
+    统一逻辑后的函数：所有仅修改阶段的规则均使用 `odds_name_original=None`，
+    通过前置条件（`current_category` 的筛选）保证仅目标告警被处理。
     """
     target_categories = {
         "全场让分盘客队涨水": {
             "全场让分盘客队": {
-                "bet_type_prefix": "SPREAD_FT_",
                 "odds_name_original": "HomeOdds",
                 "odds_name_new": "AwayOdds",
-                "modify_value": lambda x: -x if x > 0 else abs(x),
+                "modify_value": lambda x: -x if x != 0.0 else x,
                 "change_period": None
             },
-            "半场让分盘主队": {
-                "bet_type_prefix": "SPREAD_FT_",
+            "半场让分盘客队": {
                 "odds_name_original": "HomeOdds",
                 "odds_name_new": "AwayOdds",
-                "modify_value": lambda x: -x if x > 0 else abs(x),
+                "modify_value": lambda x: -x if x != 0.0 else x,
                 "change_period": "1H"
             },
-            "半场让分盘客队": {
-                "bet_type_prefix": "SPREAD_FT_",
+            "半场让分盘主队": {
                 "odds_name_original": None,
                 "odds_name_new": None,
                 "modify_value": None,
@@ -1606,65 +1602,212 @@ def modify_alert_for_category(alert):
         },
         "全场让分盘主队涨水": {
             "全场让分盘主队": {
-                "bet_type_prefix": "SPREAD_FT_",
                 "odds_name_original": "AwayOdds",
                 "odds_name_new": "HomeOdds",
-                "modify_value": lambda x: -x if x > 0 else abs(x),
+                "modify_value": lambda x: -x if x != 0.0 else x,
                 "change_period": None
             },
             "半场让分盘主队": {
-                "bet_type_prefix": "SPREAD_FT_",
                 "odds_name_original": "AwayOdds",
                 "odds_name_new": "HomeOdds",
-                "modify_value": lambda x: -x if x > 0 else abs(x),
+                "modify_value": lambda x: -x if x != 0.0 else x,
                 "change_period": "1H"
             },
             "半场让分盘客队": {
-                "bet_type_prefix": "SPREAD_FT_",
                 "odds_name_original": None,
                 "odds_name_new": None,
                 "modify_value": None,
                 "change_period": "1H"
             }
+        },
+        "半场让分盘客队涨水": {
+            "全场让分盘主队": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "FT"
+            },
+            "全场让分盘客队": {
+                "odds_name_original": "HomeOdds",
+                "odds_name_new": "AwayOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": "FT"
+            },
+            "半场让分盘客队": {
+                "odds_name_original": "HomeOdds",
+                "odds_name_new": "AwayOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": None
+            }
+        },
+        "半场让分盘主队涨水": {
+            "全场让分盘主队": {
+                "odds_name_original": "AwayOdds",
+                "odds_name_new": "HomeOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": "FT"
+            },
+            "全场让分盘客队": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "FT"
+            },
+            "半场让分盘主队": {
+                "odds_name_original": "AwayOdds",
+                "odds_name_new": "HomeOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": None
+            }
+        },
+        "全场大分盘涨水": {
+            "全场大分盘": {
+                "odds_name_original": "UnderOdds",
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None
+            },
+            "半场大分盘": {
+                "odds_name_original": "UnderOdds",
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": "1H"
+            },
+            "半场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "1H"
+            }
+        },
+        "全场小分盘涨水": {
+            "全场小分盘": {
+                "odds_name_original": "OverOdds",
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None
+            },
+            "半场大分盘": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "1H"
+            },
+            "半场小分盘": {
+                "odds_name_original": "OverOdds",
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": "1H"
+            }
+        },
+        "半场大分盘涨水": {
+            "全场大分盘": {
+                "odds_name_original": "UnderOdds",
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": "FT"
+            },
+            "半场大分盘": {
+                "odds_name_original": "UnderOdds",
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None
+            },
+            "全场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "FT"
+            }
+        },
+        "半场小分盘涨水": {
+            "全场大分盘": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "FT"
+            },
+            "全场小分盘": {
+                "odds_name_original": "OverOdds",
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": "FT"
+            },
+            "半场小分盘": {
+                "odds_name_original": "OverOdds",
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None
+            }
         }
     }
 
-    # 检查 match_type 是否为 'normal'
     if alert.get('match_type') != 'normal':
         return alert
 
+    bet_type = alert.get('bet_type_name', '')
+    odds_name = alert.get('odds_name', '')
+    current_category = None
+
+    # 根据 bet_type 和 odds_name 确定当前类别（前置条件）
+    if bet_type.startswith("SPREAD_FT_"):
+        if odds_name == "HomeOdds":
+            current_category = "全场让分盘客队涨水"
+        elif odds_name == "AwayOdds":
+            current_category = "全场让分盘主队涨水"
+    elif bet_type.startswith("SPREAD_1H_"):
+        if odds_name == "HomeOdds":
+            current_category = "半场让分盘客队涨水"
+        elif odds_name == "AwayOdds":  # 新增判断逻辑
+            current_category = "半场让分盘主队涨水"
+    # 新增的分类映射
+    elif bet_type.startswith("TOTAL_POINTS_FT_"):
+        if odds_name == "UnderOdds":
+            current_category = "全场大分盘涨水"
+        elif odds_name == "OverOdds":
+            current_category = "全场小分盘涨水"
+    elif bet_type.startswith("TOTAL_POINTS_1H_"):
+        if odds_name == "UnderOdds":
+            current_category = "半场大分盘涨水"
+        elif odds_name == "OverOdds":
+            current_category = "半场小分盘涨水"
+
+    if not current_category:
+        return alert
+
     with category_lock:
-        current_category = "全场让分盘客队涨水"  # 或根据实际逻辑动态获取
         current_status = category_status.get(current_category, "")
 
     category_rules = target_categories.get(current_category, {})
     rule = category_rules.get(current_status)
 
     if not rule:
-        return alert  # 无需修改
+        return alert
 
-    if (alert.get('bet_type_name', '').startswith(rule["bet_type_prefix"]) and
-        (rule["odds_name_original"] is None or alert.get('odds_name') == rule["odds_name_original"])):
+    # 统一逻辑：如果 odds_name_original 为 None，则无条件触发
+    if rule["odds_name_original"] is None or odds_name == rule["odds_name_original"]:
         try:
             parts = alert['bet_type_name'].split('_')
             if len(parts) != 3:
-                return alert  # 格式不符，返回原 alert
+                return alert
 
             prefix, period, value_str = parts
             value = float(value_str)
 
-            # 修改 period if needed
-            if rule["change_period"]:
-                period = rule["change_period"]
+            # 0.0 不进行正负变换
+            if value == 0.0 and rule["modify_value"]:
+                rule["modify_value"] = lambda x: x
 
             # 修改数值
             if rule["modify_value"]:
                 value = rule["modify_value"](value)
 
-            # 更新 bet_type_name
-            alert['bet_type_name'] = f"{prefix}_{period}_{value}"
+            # 修改阶段
+            if rule["change_period"]:
+                period = rule["change_period"]
 
-            # 修改 odds_name if needed
+            # 更新字段
+            alert['bet_type_name'] = f"{prefix}_{period}_{value}"
             if rule["odds_name_new"]:
                 alert['odds_name'] = rule["odds_name_new"]
 
@@ -1673,6 +1816,7 @@ def modify_alert_for_category(alert):
             print(f"修改 alert 时出错: {e}")
 
     return alert
+
 
 
 
