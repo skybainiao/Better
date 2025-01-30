@@ -127,6 +127,19 @@ USER_AGENTS = [
     # 添加更多的User-Agent字符串
 ]
 
+# 在全局区域添加
+category_status = {
+    "全场让分盘客队涨水": "全场让分盘主队",
+    "全场让分盘主队涨水": "全场让分盘客队",
+    "半场让分盘客队涨水": "半场让分盘主队",
+    "半场让分盘主队涨水": "半场让分盘客队",
+    "全场大分盘涨水": "全场小分盘",
+    "全场小分盘涨水": "全场小分盘",
+    "半场大分盘涨水": "半场小分盘",
+    "半场小分盘涨水": "半场大分盘"
+}
+category_lock = threading.Lock()
+
 
 #def get_sequential_proxy():
 #   global current_proxy_index
@@ -354,7 +367,7 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue, login_ip):
                                 alert_queue.task_done()
                                 continue
 
-                        print(f"接收到Alert: {alert}")
+                        print(username+f"接收到Alert: {alert}")
                         try:
                             match_type_in_alert = alert.get('match_type', '').strip().lower()
                             if match_type_in_alert == 'corner':
@@ -1561,6 +1574,109 @@ def re_login(driver, scraper_id, market_type):
         print(f"[{scraper_id}] re_login 失败。")
 
 
+def modify_alert_for_category(alert):
+    """
+    修改特定类别的 alert 信息。
+    只有当 match_type 为 'normal' 且类别状态为指定值时，才进行修改。
+    支持多类别和多状态，便于未来扩展。
+    """
+    target_categories = {
+        "全场让分盘客队涨水": {
+            "全场让分盘客队": {
+                "bet_type_prefix": "SPREAD_FT_",
+                "odds_name_original": "HomeOdds",
+                "odds_name_new": "AwayOdds",
+                "modify_value": lambda x: -x if x > 0 else abs(x),
+                "change_period": None
+            },
+            "半场让分盘主队": {
+                "bet_type_prefix": "SPREAD_FT_",
+                "odds_name_original": "HomeOdds",
+                "odds_name_new": "AwayOdds",
+                "modify_value": lambda x: -x if x > 0 else abs(x),
+                "change_period": "1H"
+            },
+            "半场让分盘客队": {
+                "bet_type_prefix": "SPREAD_FT_",
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "1H"
+            }
+        },
+        "全场让分盘主队涨水": {
+            "全场让分盘主队": {
+                "bet_type_prefix": "SPREAD_FT_",
+                "odds_name_original": "AwayOdds",
+                "odds_name_new": "HomeOdds",
+                "modify_value": lambda x: -x if x > 0 else abs(x),
+                "change_period": None
+            },
+            "半场让分盘主队": {
+                "bet_type_prefix": "SPREAD_FT_",
+                "odds_name_original": "AwayOdds",
+                "odds_name_new": "HomeOdds",
+                "modify_value": lambda x: -x if x > 0 else abs(x),
+                "change_period": "1H"
+            },
+            "半场让分盘客队": {
+                "bet_type_prefix": "SPREAD_FT_",
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "1H"
+            }
+        }
+    }
+
+    # 检查 match_type 是否为 'normal'
+    if alert.get('match_type') != 'normal':
+        return alert
+
+    with category_lock:
+        current_category = "全场让分盘客队涨水"  # 或根据实际逻辑动态获取
+        current_status = category_status.get(current_category, "")
+
+    category_rules = target_categories.get(current_category, {})
+    rule = category_rules.get(current_status)
+
+    if not rule:
+        return alert  # 无需修改
+
+    if (alert.get('bet_type_name', '').startswith(rule["bet_type_prefix"]) and
+        (rule["odds_name_original"] is None or alert.get('odds_name') == rule["odds_name_original"])):
+        try:
+            parts = alert['bet_type_name'].split('_')
+            if len(parts) != 3:
+                return alert  # 格式不符，返回原 alert
+
+            prefix, period, value_str = parts
+            value = float(value_str)
+
+            # 修改 period if needed
+            if rule["change_period"]:
+                period = rule["change_period"]
+
+            # 修改数值
+            if rule["modify_value"]:
+                value = rule["modify_value"](value)
+
+            # 更新 bet_type_name
+            alert['bet_type_name'] = f"{prefix}_{period}_{value}"
+
+            # 修改 odds_name if needed
+            if rule["odds_name_new"]:
+                alert['odds_name'] = rule["odds_name_new"]
+
+            print(f"Alert 修改后: {alert}")
+        except Exception as e:
+            print(f"修改 alert 时出错: {e}")
+
+    return alert
+
+
+
+
 @app.before_request
 def limit_remote_addr():
     client_ip = request.remote_addr
@@ -1568,8 +1684,29 @@ def limit_remote_addr():
         return jsonify({'status': 'error', 'message': 'Forbidden IP'}), 403
 
 
-
 # Flask路由
+@app.route('/update_category', methods=['POST'])
+def update_category():
+    data = request.get_json()
+    category = data.get('category')
+    selected_option = data.get('selected_option')
+
+    if category not in category_status:
+        return jsonify({'status': 'error', 'message': 'Invalid category'}), 400
+
+    with category_lock:
+        category_status[category] = selected_option
+        print(f"更新 {category} 状态为: {selected_option}")
+
+    return jsonify({'status': 'success', 'message': f"{category} 更新成功"}), 200
+
+
+@app.route('/get_category_status', methods=['GET'])
+def get_category_status():
+    with category_lock:
+        return jsonify({'status': 'success', 'categories': category_status}), 200
+
+
 @app.route('/receive_data', methods=['POST'])
 def receive_data():
     data = request.get_json()
