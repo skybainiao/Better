@@ -650,10 +650,34 @@ def run_test():
             }
         },
         {
+            "desc": "测试3: TOTAL_POINTS_FT_2.5 + OverOdds => 全场小分盘涨水",
+            "alert": {
+                "bet_type_name": "TOTAL_POINTS_FT_2.5",
+                "odds_name": "OverOdds",
+                "match_type": "normal"
+            }
+        },
+        {
             "desc": "测试4: SPREAD_1H_0.0 + AwayOdds => 半场让分盘主队涨水",
             "alert": {
                 "bet_type_name": "SPREAD_1H_0.0",
                 "odds_name": "AwayOdds",
+                "match_type": "normal"
+            }
+        },
+        {
+            "desc": "测试4: SPREAD_1H_0.0 + HomeOdds => 半场让分盘客队涨水",
+            "alert": {
+                "bet_type_name": "SPREAD_1H_0.0",
+                "odds_name": "HomeOdds",
+                "match_type": "normal"
+            }
+        },
+        {
+            "desc": "测试5: TOTAL_POINTS_1H_2.0 + UnderOdds => 半场大分盘涨水",
+            "alert": {
+                "bet_type_name": "TOTAL_POINTS_1H_2.0",
+                "odds_name": "UnderOdds",
                 "match_type": "normal"
             }
         },
