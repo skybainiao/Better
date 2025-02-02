@@ -134,7 +134,7 @@ category_status = {
     "半场让分盘客队涨水": "半场让分盘主队",
     "半场让分盘主队涨水": "半场让分盘客队",
     "全场大分盘涨水": "全场小分盘",
-    "全场小分盘涨水": "全场小分盘",
+    "全场小分盘涨水": "全场大分盘",
     "半场大分盘涨水": "半场小分盘",
     "半场小分盘涨水": "半场大分盘"
 }
@@ -357,7 +357,7 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue, login_ip):
 
                     while not stop_event.is_set():
                         try:
-                            alert = alert_queue.get(timeout=1)
+                            alert = alert_queue.get(timeout=0.1)
                         except Empty:
                             continue
 
@@ -367,16 +367,21 @@ def run_scraper(account, market_type, scraper_id, proxy, alert_queue, login_ip):
                                 alert_queue.task_done()
                                 continue
 
-                        print(username+f"接收到Alert: {alert}")
+                        print(username + f"接收到Alert: {alert}")
                         try:
                             match_type_in_alert = alert.get('match_type', '').strip().lower()
                             if match_type_in_alert == 'corner':
                                 click_corner_odds(driver, alert, scraper_id, bet_amount)
                             elif match_type_in_alert == 'normal':
-                                if '1H' in alert.get('bet_type_name', ''):
-                                    click_odds_half(driver, alert, scraper_id, bet_amount)
+                                # 如果 alert 中包含 'market_category' 和 'market_status' 字段，则统一调用 click_odds_new
+                                if alert.get('market_category') and alert.get('market_status'):
+                                    click_odds_new(driver, alert, scraper_id, bet_amount)
                                 else:
-                                    click_odds(driver, alert, scraper_id, bet_amount)
+                                    # 否则按照原有逻辑判断是否为半场
+                                    if '1H' in alert.get('bet_type_name', ''):
+                                        click_odds_half(driver, alert, scraper_id, bet_amount)
+                                    else:
+                                        click_odds(driver, alert, scraper_id, bet_amount)
                             else:
                                 print(f"未知的 match_type: {match_type_in_alert}")
                         except Exception as e:
@@ -757,6 +762,189 @@ def click_odds(driver, alert, scraper_id, bet_amount):
 
     except Exception as e:
         print(f"点击赔率按钮失败: {e}")
+
+
+def click_odds_new(driver, alert, scraper_id, bet_amount):
+    try:
+        # 1) 从 alert 中提取必要数据（保留原有逻辑）
+        league_name = alert.get('league_name', '').strip()
+        home_team = alert.get('home_team', '').strip()
+        away_team = alert.get('away_team', '').strip()
+        bet_type_name = alert.get('bet_type_name', '').strip()
+        odds_name = alert.get('odds_name', '').strip()
+
+        # 2) 解析盘口类型并映射到按钮ID后缀（核心修改部分）
+        button_id_suffix = None
+        half_mode = False  # 标记是否需要半场处理
+        if "SPREAD" in bet_type_name:
+            if "HomeOdds" in odds_name:
+                button_id_suffix = "_REH"  # 让分盘主队
+            elif "AwayOdds" in odds_name:
+                button_id_suffix = "_REC"  # 让分盘客队
+        elif "TOTAL_POINTS" in bet_type_name:
+            if "OverOdds" in odds_name:
+                button_id_suffix = "_ROUC"  # 大小球大盘
+            elif "UnderOdds" in odds_name:
+                button_id_suffix = "_ROUH"  # 大小球小盘
+        else:
+            print(f"无法解析盘口类型: bet_type_name={bet_type_name}, odds_name={odds_name}")
+            return
+
+        # 如果bet_type_name包含 "1H"，则认为当前要求半场数据，半场模式逻辑将被触发
+        if "1H" in bet_type_name:
+            half_mode = True
+
+        # 3) 保留原有的联赛定位逻辑
+        league_xpath = (
+            f"//div[contains(@class, 'btn_title_le') "
+            f"and .//tt[@id='lea_name' and text()='{league_name}']]"
+        )
+        league_elements = driver.find_elements(By.XPATH, league_xpath)
+        print(f"联赛 '{league_name}' 找到 {len(league_elements)} 个元素(可能折叠/展开)")
+
+        if not league_elements:
+            print(f"未找到联赛: {league_name}")
+            return
+
+        found_match = False
+
+        # 4) 遍历联赛和比赛（保留原有结构）
+        for league_element in league_elements:
+            try:
+                game_xpath = ".//following-sibling::div[starts-with(@id, 'game_') and contains(@class, 'box_lebet')]"
+                game_elements = league_element.find_elements(By.XPATH, game_xpath)
+                print(f"联赛 '{league_name}' 下找到 {len(game_elements)} 场比赛")
+
+                for idx, game_element in enumerate(game_elements, start=1):
+                    try:
+                        # 保留原有的比赛展开逻辑
+                        style_value = (game_element.get_attribute("style") or "").replace(" ", "").lower()
+                        if "display:none" in style_value:
+                            try:
+                                driver.execute_script("arguments[0].scrollIntoView(true);", league_element)
+                                league_element.click()
+                            except Exception as e:
+                                print(f"点击联赛展开时出错: {e}")
+
+                        # 保留主客队匹配逻辑
+                        game_home = game_element.find_element(
+                            By.XPATH, ".//div[contains(@class, 'teamH')]/span[contains(@class, 'text_team')]"
+                        ).text.strip()
+                        game_away = game_element.find_element(
+                            By.XPATH, ".//div[contains(@class, 'teamC')]/span[contains(@class, 'text_team')]"
+                        ).text.strip()
+                        print(f"检查比赛 {idx}: {game_home} vs {game_away}")
+
+                        if game_home != home_team or game_away != away_team:
+                            continue
+
+                        found_match = True
+                        game_id = game_element.get_attribute("id")
+
+                        # ===== 半场模式判断及切换逻辑 =====
+                        if half_mode:
+                            # 检查比赛区域是否已经切换到半场模式（是否存在 .hdpou_1h）
+                            already_half = len(game_element.find_elements(
+                                By.CSS_SELECTOR, "div.form_lebet_hdpou.hdpou_1h"
+                            )) > 0
+                            if already_half:
+                                print("[1H] 已经处于半场模式，无需点击1H按钮")
+                            else:
+                                # 尝试点击1H按钮切换到半场模式
+                                numeric_id = game_id[5:] if game_id.startswith("game_") else game_id
+                                right_info_id = f"right_info_{numeric_id}"
+                                try:
+                                    right_info_el = driver.find_element(By.ID, right_info_id)
+                                    half_btn_div = right_info_el.find_element(
+                                        By.CSS_SELECTOR, "div.rnou_btn.rnou_btn_1H"
+                                    )
+                                    btn_class = half_btn_div.get_attribute("class") or ""
+                                    if "off" in btn_class or "none" in btn_class:
+                                        print(f"[1H] 半场按钮处于off/none状态，无法点击 => {numeric_id}")
+                                        return
+
+                                    driver.execute_script("arguments[0].scrollIntoView(true);", half_btn_div)
+                                    WebDriverWait(driver, 5).until(
+                                        EC.element_to_be_clickable(half_btn_div)
+                                    ).click()
+                                    print("[1H] 已点击1H按钮，等待切换到半场模式...")
+
+                                    try:
+                                        WebDriverWait(driver, 5).until(
+                                            lambda d: len(d.find_elements(
+                                                By.XPATH,
+                                                f"//div[@id='{game_id}']//div[contains(@class,'hdpou_1h')]"
+                                            )) > 0
+                                        )
+                                        print("[1H] 检测到半场标识（hdpou_1h），切换成功")
+                                    except TimeoutException:
+                                        print("[1H] 等待半场切换超时，可能切换失败")
+                                        return
+                                except Exception as e:
+                                    print(f"[1H] 定位/点击1H按钮时出错: {e}")
+                                    return
+                            # 半场模式下按钮后缀应为当前已使用的后缀，无需额外修改
+                        # ===== 半场逻辑结束 =====
+
+                        # 5) 构造新按钮XPath：仅依赖按钮ID后缀
+                        odds_button_xpath = (
+                            f"//div[@id='{game_id}']//"
+                            f"div[contains(@class, 'btn_hdpou_odd') and "
+                            f"contains(@id, '{button_id_suffix}')]"
+                        )
+
+                        # 6) 保留原有的弹窗检测逻辑
+                        try:
+                            driver.find_element(By.ID, 'bet_show')
+                            close_bet_popup(driver)
+                            print("已关闭存在的投注弹窗。")
+                        except NoSuchElementException:
+                            pass
+
+                        # 7) 点击第一个匹配的按钮（核心修改）
+                        clicked_ok = False
+                        for attempt in range(3):
+                            try:
+                                odds_buttons = driver.find_elements(By.XPATH, odds_button_xpath)
+                                if not odds_buttons:
+                                    print(f"[{attempt + 1}/3] 未找到 {button_id_suffix} 类型按钮")
+                                    time.sleep(0.5)
+                                    continue
+
+                                # 直接点击第一个按钮
+                                first_button = odds_buttons[0]
+                                driver.execute_script("arguments[0].scrollIntoView(true);", first_button)
+                                WebDriverWait(driver, 5).until(
+                                    EC.element_to_be_clickable(first_button)
+                                ).click()
+
+                                print(f"点击成功: {button_id_suffix} 类型第一个按钮")
+                                handle_bet_popup(driver, scraper_id, bet_amount)
+                                clicked_ok = True
+                                break
+                            except Exception as e:
+                                print(f"点击失败({attempt + 1}/3): {e}")
+                                time.sleep(1)
+
+                        if clicked_ok:
+                            return
+                        else:
+                            print(f"连续3次点击失败: {button_id_suffix}")
+                            return
+
+                    except (StaleElementReferenceException, NoSuchElementException) as e:
+                        print(f"比赛 {idx} 解析时出错: {e}")
+                        continue
+            except StaleElementReferenceException as e:
+                print(f"联赛元素失效: {e}")
+                continue
+
+        if not found_match:
+            print(f"在联赛 '{league_name}' 中未找到比赛: {home_team} vs {away_team}")
+
+    except Exception as e:
+        print(f"点击赔率按钮失败: {e}")
+        traceback.print_exc()
 
 
 def click_odds_half(driver, alert, scraper_id, bet_amount):
@@ -1232,7 +1420,8 @@ def click_corner_odds(driver, alert, scraper_id, bet_amount):
 
 
 def handle_bet_popup(driver, scraper_id, bet_amount):
-    #print("弹窗")
+    print("弹窗")
+    '''
     try:
         wait = WebDriverWait(driver, 15)
 
@@ -1371,17 +1560,17 @@ def handle_bet_popup(driver, scraper_id, bet_amount):
         with status_lock:
             if scraper_id in scraper_info:
                 full_info = (
-                    f"菜单类型: {menutype}\n"
-                    f"比分: {score}\n"
-                    f"联赛: {league}\n"
-                    f"主队: {team_h}\n"
-                    f"客队: {team_c}\n"
-                    f"投注队伍: {chose_team}\n"
-                    f"选择盘口: {chose_con}\n"
-                    f"赔率: {ior}\n"
-                    f"投注金额: {stake}\n"
-                    f"可赢金额: {win_gold}\n"
-                    f"注单号: {tid}\n"
+                    f"菜单类型: {menutype} | "
+                    f"比分: {score} | "
+                    f"联赛: {league} | "
+                    f"主队: {team_h} | "
+                    f"客队: {team_c} | "
+                    f"投注队伍: {chose_team} | "
+                    f"选择盘口: {chose_con} | "
+                    f"赔率: {ior} | "
+                    f"投注金额: {stake} | "
+                    f"可赢金额: {win_gold} | "
+                    f"注单号: {tid}"
                 )
                 scraper_info[scraper_id]["last_bet_info"] = full_info
                 print("记录完整投注回执信息。")
@@ -1390,6 +1579,7 @@ def handle_bet_popup(driver, scraper_id, bet_amount):
         print(f"处理投注流程时发生错误: {e}")
     finally:
         close_bet_popup(driver)
+'''
 
 
 def check_malay_odds(old_val, new_val, min_odds, max_odds):
@@ -1575,172 +1765,7 @@ def re_login(driver, scraper_id, market_type):
 
 
 def modify_alert_for_category(alert):
-    """
-    统一逻辑后的函数：所有仅修改阶段的规则均使用 `odds_name_original=None`，
-    通过前置条件（`current_category` 的筛选）保证仅目标告警被处理。
-    """
-    target_categories = {
-        "全场让分盘客队涨水": {
-            "全场让分盘客队": {
-                "odds_name_original": "HomeOdds",
-                "odds_name_new": "AwayOdds",
-                "modify_value": lambda x: -x if x != 0.0 else x,
-                "change_period": None
-            },
-            "半场让分盘客队": {
-                "odds_name_original": "HomeOdds",
-                "odds_name_new": "AwayOdds",
-                "modify_value": lambda x: -x if x != 0.0 else x,
-                "change_period": "1H"
-            },
-            "半场让分盘主队": {
-                "odds_name_original": None,
-                "odds_name_new": None,
-                "modify_value": None,
-                "change_period": "1H"
-            }
-        },
-        "全场让分盘主队涨水": {
-            "全场让分盘主队": {
-                "odds_name_original": "AwayOdds",
-                "odds_name_new": "HomeOdds",
-                "modify_value": lambda x: -x if x != 0.0 else x,
-                "change_period": None
-            },
-            "半场让分盘主队": {
-                "odds_name_original": "AwayOdds",
-                "odds_name_new": "HomeOdds",
-                "modify_value": lambda x: -x if x != 0.0 else x,
-                "change_period": "1H"
-            },
-            "半场让分盘客队": {
-                "odds_name_original": None,
-                "odds_name_new": None,
-                "modify_value": None,
-                "change_period": "1H"
-            }
-        },
-        "半场让分盘客队涨水": {
-            "全场让分盘主队": {
-                "odds_name_original": None,
-                "odds_name_new": None,
-                "modify_value": None,
-                "change_period": "FT"
-            },
-            "全场让分盘客队": {
-                "odds_name_original": "HomeOdds",
-                "odds_name_new": "AwayOdds",
-                "modify_value": lambda x: -x if x != 0.0 else x,
-                "change_period": "FT"
-            },
-            "半场让分盘客队": {
-                "odds_name_original": "HomeOdds",
-                "odds_name_new": "AwayOdds",
-                "modify_value": lambda x: -x if x != 0.0 else x,
-                "change_period": None
-            }
-        },
-        "半场让分盘主队涨水": {
-            "全场让分盘主队": {
-                "odds_name_original": "AwayOdds",
-                "odds_name_new": "HomeOdds",
-                "modify_value": lambda x: -x if x != 0.0 else x,
-                "change_period": "FT"
-            },
-            "全场让分盘客队": {
-                "odds_name_original": None,
-                "odds_name_new": None,
-                "modify_value": None,
-                "change_period": "FT"
-            },
-            "半场让分盘主队": {
-                "odds_name_original": "AwayOdds",
-                "odds_name_new": "HomeOdds",
-                "modify_value": lambda x: -x if x != 0.0 else x,
-                "change_period": None
-            }
-        },
-        "全场大分盘涨水": {
-            "全场大分盘": {
-                "odds_name_original": "UnderOdds",
-                "odds_name_new": "OverOdds",
-                "modify_value": None,
-                "change_period": None
-            },
-            "半场大分盘": {
-                "odds_name_original": "UnderOdds",
-                "odds_name_new": "OverOdds",
-                "modify_value": None,
-                "change_period": "1H"
-            },
-            "半场小分盘": {
-                "odds_name_original": None,
-                "odds_name_new": None,
-                "modify_value": None,
-                "change_period": "1H"
-            }
-        },
-        "全场小分盘涨水": {
-            "全场小分盘": {
-                "odds_name_original": "OverOdds",
-                "odds_name_new": "UnderOdds",
-                "modify_value": None,
-                "change_period": None
-            },
-            "半场大分盘": {
-                "odds_name_original": None,
-                "odds_name_new": None,
-                "modify_value": None,
-                "change_period": "1H"
-            },
-            "半场小分盘": {
-                "odds_name_original": "OverOdds",
-                "odds_name_new": "UnderOdds",
-                "modify_value": None,
-                "change_period": "1H"
-            }
-        },
-        "半场大分盘涨水": {
-            "全场大分盘": {
-                "odds_name_original": "UnderOdds",
-                "odds_name_new": "OverOdds",
-                "modify_value": None,
-                "change_period": "FT"
-            },
-            "半场大分盘": {
-                "odds_name_original": "UnderOdds",
-                "odds_name_new": "OverOdds",
-                "modify_value": None,
-                "change_period": None
-            },
-            "全场小分盘": {
-                "odds_name_original": None,
-                "odds_name_new": None,
-                "modify_value": None,
-                "change_period": "FT"
-            }
-        },
-        "半场小分盘涨水": {
-            "全场大分盘": {
-                "odds_name_original": None,
-                "odds_name_new": None,
-                "modify_value": None,
-                "change_period": "FT"
-            },
-            "全场小分盘": {
-                "odds_name_original": "OverOdds",
-                "odds_name_new": "UnderOdds",
-                "modify_value": None,
-                "change_period": "FT"
-            },
-            "半场小分盘": {
-                "odds_name_original": "OverOdds",
-                "odds_name_new": "UnderOdds",
-                "modify_value": None,
-                "change_period": None
-            }
-        }
-    }
+    print("[DEBUG] modify_alert_for_category1 => new version loaded!")  # DEBUG
 
     if alert.get('match_type') != 'normal':
         return alert
@@ -1749,7 +1774,7 @@ def modify_alert_for_category(alert):
     odds_name = alert.get('odds_name', '')
     current_category = None
 
-    # 根据 bet_type 和 odds_name 确定当前类别（前置条件）
+    # 1) 根据 bet_type_name + odds_name 区分大类别
     if bet_type.startswith("SPREAD_FT_"):
         if odds_name == "HomeOdds":
             current_category = "全场让分盘客队涨水"
@@ -1758,9 +1783,8 @@ def modify_alert_for_category(alert):
     elif bet_type.startswith("SPREAD_1H_"):
         if odds_name == "HomeOdds":
             current_category = "半场让分盘客队涨水"
-        elif odds_name == "AwayOdds":  # 新增判断逻辑
+        elif odds_name == "AwayOdds":
             current_category = "半场让分盘主队涨水"
-    # 新增的分类映射
     elif bet_type.startswith("TOTAL_POINTS_FT_"):
         if odds_name == "UnderOdds":
             current_category = "全场大分盘涨水"
@@ -1775,50 +1799,568 @@ def modify_alert_for_category(alert):
     if not current_category:
         return alert
 
+    # 2) 取出全局状态
     with category_lock:
         current_status = category_status.get(current_category, "")
 
-    category_rules = target_categories.get(current_category, {})
-    rule = category_rules.get(current_status)
+    # 3) 构造 "大字典"
+    # [内容与之前一致，省略，这里只给出省略号...请保留你的once_replace和所有子状态定义]
+    def once_replace(value: str, old: str, new: str):
+        return value.replace(old, new, 1)
 
+    target_categories = {
+        "全场让分盘客队涨水": {
+            # 1) "全场让分盘客队"
+            "全场让分盘客队": {
+                "odds_name_original": "HomeOdds",
+                "odds_name_new": "AwayOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": None,
+                # 合并底部逻辑 => 这条子状态无字符串替换 => None
+                "edit_rule": None
+            },
+            # 2) "半场让分盘客队"
+            "半场让分盘客队": {
+                "odds_name_original": "HomeOdds",
+                "odds_name_new": "AwayOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": "1H",
+                "edit_rule": None
+            },
+            # 3) "半场让分盘主队"
+            "半场让分盘主队": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "1H",
+                "edit_rule": None
+            },
+            # 4) "全场大分盘" => 原底部: "SPREAD"->"TOTAL_POINTS", odds->"OverOdds"
+            "全场大分盘": {
+                "odds_name_original": None,  # 无条件
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: once_replace(txt, "SPREAD", "TOTAL_POINTS")
+            },
+            # 5) "全场小分盘" => ...
+            "全场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: once_replace(txt, "SPREAD", "TOTAL_POINTS")
+            },
+            # 6) "半场大分盘" => SPREAD->TOTAL_POINTS & FT->1H, odds->OverOdds
+            "半场大分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: once_replace(
+                    once_replace(txt, "SPREAD", "TOTAL_POINTS"), "FT", "1H"
+                )
+            },
+            # 7) "半场小分盘"
+            "半场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: once_replace(
+                    once_replace(txt, "SPREAD", "TOTAL_POINTS"), "FT", "1H"
+                )
+            },
+        },
+        "全场让分盘主队涨水": {
+            # 1) 全场让分盘主队 (顶部逻辑)
+            "全场让分盘主队": {
+                "odds_name_original": "AwayOdds",
+                "odds_name_new": "HomeOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": None,
+                "edit_rule": None  # 不需要字符串替换
+            },
+            # 2) 半场让分盘主队 (顶部逻辑)
+            "半场让分盘主队": {
+                "odds_name_original": "AwayOdds",
+                "odds_name_new": "HomeOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": "1H",
+                "edit_rule": None
+            },
+            # 3) 半场让分盘客队 (顶部逻辑)
+            "半场让分盘客队": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "1H",
+                "edit_rule": None
+            },
+            # 4) 全场大分盘 (底部逻辑: "SPREAD"→"TOTAL_POINTS", odds→"OverOdds")
+            "全场大分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1)
+            },
+            # 5) 全场小分盘 (底部逻辑: odds→"UnderOdds", "SPREAD"→"TOTAL_POINTS")
+            "全场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1)
+            },
+            # 6) 半场大分盘 (底部逻辑: "SPREAD"→"TOTAL_POINTS" & "FT"→"1H", odds→"OverOdds")
+            "半场大分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1).replace("FT", "1H", 1)
+            },
+            # 7) 半场小分盘
+            "半场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1).replace("FT", "1H", 1)
+            }
+        },
+        "半场让分盘客队涨水": {
+            # 1) 全场让分盘主队 (顶部逻辑)
+            "全场让分盘主队": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "FT",
+                "edit_rule": None
+            },
+            # 2) 全场让分盘客队 (顶部逻辑)
+            "全场让分盘客队": {
+                "odds_name_original": "HomeOdds",
+                "odds_name_new": "AwayOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": "FT",
+                "edit_rule": None
+            },
+            # 3) 半场让分盘客队 (顶部逻辑)
+            "半场让分盘客队": {
+                "odds_name_original": "HomeOdds",
+                "odds_name_new": "AwayOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": None,
+                "edit_rule": None
+            },
+            # 4) 全场大分盘
+            "全场大分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1).replace("1H", "FT", 1)
+            },
+            # 5) 全场小分盘
+            "全场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1).replace("1H", "FT", 1)
+            },
+            # 6) 半场大分盘
+            "半场大分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1)
+            },
+            # 7) 半场小分盘
+            "半场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1)
+            }
+        },
+        "半场让分盘主队涨水": {
+            # 1) 全场让分盘主队 (顶部逻辑)
+            "全场让分盘主队": {
+                "odds_name_original": "AwayOdds",
+                "odds_name_new": "HomeOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": "FT",
+                "edit_rule": None
+            },
+            # 2) 全场让分盘客队 (顶部逻辑)
+            "全场让分盘客队": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "FT",
+                "edit_rule": None
+            },
+            # 3) 半场让分盘主队 (顶部逻辑)
+            "半场让分盘主队": {
+                "odds_name_original": "AwayOdds",
+                "odds_name_new": "HomeOdds",
+                "modify_value": lambda x: -x if x != 0.0 else x,
+                "change_period": None,
+                "edit_rule": None
+            },
+            # 4) 全场大分盘
+            "全场大分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1).replace("1H", "FT", 1)
+            },
+            # 5) 全场小分盘
+            "全场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1).replace("1H", "FT", 1)
+            },
+            # 6) 半场大分盘
+            "半场大分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1)
+            },
+            # 7) 半场小分盘
+            "半场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("SPREAD", "TOTAL_POINTS", 1)
+            }
+        },
+        "全场大分盘涨水": {
+            # 1) 全场大分盘 (顶部逻辑)
+            "全场大分盘": {
+                "odds_name_original": "UnderOdds",
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": None
+            },
+            # 2) 半场大分盘 (顶部逻辑)
+            "半场大分盘": {
+                "odds_name_original": "UnderOdds",
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": "1H",
+                "edit_rule": None
+            },
+            # 3) 半场小分盘 (顶部逻辑)
+            "半场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "1H",
+                "edit_rule": None
+            },
+
+            # 4) 全场让分盘主队 (底部逻辑: "TOTAL_POINTS"→"SPREAD", odds→"HomeOdds")
+            "全场让分盘主队": {
+                "odds_name_original": None,
+                "odds_name_new": "HomeOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1)
+            },
+            # 5) 全场让分盘客队 (底部逻辑: odds→"AwayOdds")
+            "全场让分盘客队": {
+                "odds_name_original": None,
+                "odds_name_new": "AwayOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1)
+            },
+            # 6) 半场让分盘主队 (底部逻辑: "TOTAL_POINTS"→"SPREAD", "FT"→"1H", odds→"HomeOdds")
+            "半场让分盘主队": {
+                "odds_name_original": None,
+                "odds_name_new": "HomeOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace(
+                    "TOTAL_POINTS", "SPREAD", 1
+                ).replace("FT", "1H", 1)
+            },
+            # 7) 半场让分盘客队
+            "半场让分盘客队": {
+                "odds_name_original": None,
+                "odds_name_new": "AwayOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace(
+                    "TOTAL_POINTS", "SPREAD", 1
+                ).replace("FT", "1H", 1)
+            }
+        },
+        "全场小分盘涨水": {
+            # 1) 全场小分盘 (顶部逻辑)
+            "全场小分盘": {
+                "odds_name_original": "OverOdds",
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": None
+            },
+            # 2) 半场大分盘 (顶部逻辑)
+            "半场大分盘": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "1H",
+                "edit_rule": None
+            },
+            # 3) 半场小分盘 (顶部逻辑)
+            "半场小分盘": {
+                "odds_name_original": "OverOdds",
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": "1H",
+                "edit_rule": None
+            },
+
+            # 4) 全场让分盘主队 (底部: "TOTAL_POINTS"→"SPREAD", odds→"HomeOdds")
+            "全场让分盘主队": {
+                "odds_name_original": None,
+                "odds_name_new": "HomeOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1)
+            },
+            # 5) 全场让分盘客队
+            "全场让分盘客队": {
+                "odds_name_original": None,
+                "odds_name_new": "AwayOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1)
+            },
+            # 6) 半场让分盘主队 ( "TOTAL_POINTS"→"SPREAD", "FT"→"1H", odds→"HomeOdds")
+            "半场让分盘主队": {
+                "odds_name_original": None,
+                "odds_name_new": "HomeOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1).replace("FT", "1H", 1)
+            },
+            # 7) 半场让分盘客队
+            "半场让分盘客队": {
+                "odds_name_original": None,
+                "odds_name_new": "AwayOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1).replace("FT", "1H", 1)
+            }
+        },
+        "半场大分盘涨水": {
+            # 1) 全场大分盘 (顶部逻辑)
+            "全场大分盘": {
+                "odds_name_original": "UnderOdds",
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": "FT",
+                "edit_rule": None
+            },
+            # 2) 半场大分盘
+            "半场大分盘": {
+                "odds_name_original": "UnderOdds",
+                "odds_name_new": "OverOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": None
+            },
+            # 3) 全场小分盘 (顶部类似)
+            "全场小分盘": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "FT",
+                "edit_rule": None
+            },
+
+            # 4) 全场让分盘主队 (底部: "TOTAL_POINTS"->"SPREAD", "1H"->"FT", odds->"HomeOdds")
+            "全场让分盘主队": {
+                "odds_name_original": None,
+                "odds_name_new": "HomeOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1).replace("1H", "FT", 1)
+            },
+            # 5) 全场让分盘客队
+            "全场让分盘客队": {
+                "odds_name_original": None,
+                "odds_name_new": "AwayOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1).replace("1H", "FT", 1)
+            },
+            # 6) 半场让分盘主队
+            "半场让分盘主队": {
+                "odds_name_original": None,
+                "odds_name_new": "HomeOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1)
+                # 如果还需 "FT"->"1H", 也可加
+            },
+            # 7) 半场让分盘客队
+            "半场让分盘客队": {
+                "odds_name_original": None,
+                "odds_name_new": "AwayOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1)
+            }
+        },
+        "半场小分盘涨水": {
+            # 1) 全场大分盘 / 全场小分盘 / 半场小分盘 (顶部类似)
+            "全场大分盘": {
+                "odds_name_original": None,
+                "odds_name_new": None,
+                "modify_value": None,
+                "change_period": "FT",
+                "edit_rule": None
+            },
+            "全场小分盘": {
+                "odds_name_original": "OverOdds",
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": "FT",
+                "edit_rule": None
+            },
+            "半场小分盘": {
+                "odds_name_original": "OverOdds",
+                "odds_name_new": "UnderOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": None
+            },
+
+            # 4) 全场让分盘主队 (底部: "TOTAL_POINTS"->"SPREAD", "1H"->"FT", odds->"HomeOdds")
+            "全场让分盘主队": {
+                "odds_name_original": None,
+                "odds_name_new": "HomeOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1).replace("1H", "FT", 1)
+            },
+            # 5) 全场让分盘客队
+            "全场让分盘客队": {
+                "odds_name_original": None,
+                "odds_name_new": "AwayOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1).replace("1H", "FT", 1)
+            },
+            # 6) 半场让分盘主队
+            "半场让分盘主队": {
+                "odds_name_original": None,
+                "odds_name_new": "HomeOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1)
+            },
+            # 7) 半场让分盘客队
+            "半场让分盘客队": {
+                "odds_name_original": None,
+                "odds_name_new": "AwayOdds",
+                "modify_value": None,
+                "change_period": None,
+                "edit_rule": lambda txt: txt.replace("TOTAL_POINTS", "SPREAD", 1)
+            }
+        }
+    }
+
+    # 4) 找到 rule
+    category_sub = target_categories.get(current_category, {})
+    rule = category_sub.get(current_status)
     if not rule:
         return alert
 
-    # 统一逻辑：如果 odds_name_original 为 None，则无条件触发
-    if rule["odds_name_original"] is None or odds_name == rule["odds_name_original"]:
-        try:
-            parts = alert['bet_type_name'].split('_')
+    if rule["odds_name_original"] is not None and odds_name != rule["odds_name_original"]:
+        return alert
+
+    # 5) 执行一次修改
+    try:
+        # 1) 根据 "TOTAL_POINTS_" 还是 "SPREAD" 不同，拆分出 prefix / period / val_str
+        parts = bet_type.split('_')
+
+        if bet_type.startswith("TOTAL_POINTS_"):
+            # => 期待 4 段，比如 ["TOTAL","POINTS","FT","2.5"]
+            if len(parts) != 4:
+                return alert  # 结构不对就直接返回
+            prefix_part1, prefix_part2, period, val_str = parts
+            prefix = prefix_part1 + "_" + prefix_part2  # => "TOTAL_POINTS"
+        else:
+            # => "SPREAD_FT_-0.5" 或 "SPREAD_1H_0.0"，只有 3 段
             if len(parts) != 3:
                 return alert
+            prefix, period, val_str = parts
 
-            prefix, period, value_str = parts
-            value = float(value_str)
+        # 2) 解析数值
+        val = float(val_str)
+        modified = False
 
-            # 0.0 不进行正负变换
-            if value == 0.0 and rule["modify_value"]:
-                rule["modify_value"] = lambda x: x
+        # 3) 如果 value=0.0 且有取反 => 不取反
+        if val == 0.0 and rule["modify_value"]:
+            rule["modify_value"] = lambda x: x
 
-            # 修改数值
-            if rule["modify_value"]:
-                value = rule["modify_value"](value)
+        # (a) 数值取反
+        if rule["modify_value"]:
+            new_val = rule["modify_value"](val)
+            if new_val != val:
+                val = new_val
+                modified = True
 
-            # 修改阶段
-            if rule["change_period"]:
-                period = rule["change_period"]
+        # (b) change_period
+        if rule["change_period"] and rule["change_period"] != period:
+            period = rule["change_period"]
+            modified = True
 
-            # 更新字段
-            alert['bet_type_name'] = f"{prefix}_{period}_{value}"
+        # (c) 拼装 bet_type_name
+        new_bet_type_name = f"{prefix}_{period}_{val}"
+
+        # (d) 若有 edit_rule (字符串替换)
+        if rule.get("edit_rule"):
+            replaced = rule["edit_rule"](new_bet_type_name)
+            if replaced != new_bet_type_name:
+                new_bet_type_name = replaced
+                modified = True
+
+        # (e) 若 odds_name_new 不同也算修改
+        if rule.get("odds_name_new"):
+            if rule["odds_name_new"] != alert.get('odds_name'):
+                modified = True
+
+        # 最后若 modified=True => 写回 alert
+        if modified:
+            alert['bet_type_name'] = new_bet_type_name
             if rule["odds_name_new"]:
                 alert['odds_name'] = rule["odds_name_new"]
-
+            alert['market_category'] = current_category
+            alert['market_status'] = current_status
             print(f"Alert 修改后: {alert}")
-        except Exception as e:
-            print(f"修改 alert 时出错: {e}")
+
+    except Exception as e:
+        print(f"修改 alert 时出错: {e}")
 
     return alert
-
-
-
 
 
 @app.before_request
@@ -1856,6 +2398,9 @@ def receive_data():
     data = request.get_json()
     if not data:
         return jsonify({'status': 'error', 'message': 'No JSON data received'}), 400
+
+    # 根据需求修改alert
+    modify_alert_for_category(data)
 
     # ============== 原有逻辑 ==============
     market_type = map_alert_to_market_type(data)
