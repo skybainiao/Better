@@ -26,8 +26,8 @@ from urllib3.exceptions import InsecureRequestWarning
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # 在你的 Flask 应用里，添加一个 before_request 钩子即可：
-allowed_ips = {"127.0.0.1", "188.180.86.74"}
-#"160.25.20.134",
+allowed_ips = {"127.0.0.1", "188.180.86.74","160.25.20.123","160.25.20.134"}
+
 # 用于跟踪抓取线程状态
 thread_status = {}
 status_lock = threading.Lock()
