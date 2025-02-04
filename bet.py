@@ -974,7 +974,7 @@ def click_odds_new(driver, alert, scraper_id, bet_amount):
 
                                     print(f"[click_odds_new] 点击成功 => {button_id_suffix}")
                                     # 调用下注弹窗处理
-                                    handle_bet_popup(driver, scraper_id, bet_amount, alert)
+                                    handle_bet_popup(driver, scraper_id, bet_amount)
                                     clicked_ok = True
                                     break
                                 except Exception as e:
@@ -1475,10 +1475,9 @@ def click_corner_odds(driver, alert, scraper_id, bet_amount):
         print(f"[Corner] click_corner_odds 出错: {e}")
 
 
-def handle_bet_popup(driver, scraper_id, bet_amount, alert):
+def handle_bet_popup(driver, scraper_id, bet_amount):
     #print("弹窗")
-    a = alert.get('market_category', '').strip()
-    b = alert.get('market_status', '').strip()
+
     try:
         wait = WebDriverWait(driver, 15)
 
@@ -1617,8 +1616,6 @@ def handle_bet_popup(driver, scraper_id, bet_amount, alert):
         with status_lock:
             if scraper_id in scraper_info:
                 full_info = (
-                    f"{a} | "
-                    f"{b} | "
                     f"菜单类型: {menutype} | "
                     f"比分: {score} | "
                     f"联赛: {league} | "
