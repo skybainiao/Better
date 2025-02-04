@@ -477,6 +477,7 @@ def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
         # 将 (scraper_id, queue) 添加进列表
         market_type_to_alert_queues[market_type].append((scraper_id, alert_queue))
 
+
     scraper_thread = threading.Thread(
         target=run_scraper,
         args=(account, market_type, scraper_id, proxy, alert_queue, login_ip),  # 传递 login_ip
@@ -973,7 +974,7 @@ def click_odds_new(driver, alert, scraper_id, bet_amount):
 
                                     print(f"[click_odds_new] 点击成功 => {button_id_suffix}")
                                     # 调用下注弹窗处理
-                                    handle_bet_popup(driver, scraper_id, bet_amount)
+                                    handle_bet_popup(driver, scraper_id, bet_amount, alert)
                                     clicked_ok = True
                                     break
                                 except Exception as e:
@@ -1474,8 +1475,10 @@ def click_corner_odds(driver, alert, scraper_id, bet_amount):
         print(f"[Corner] click_corner_odds 出错: {e}")
 
 
-def handle_bet_popup(driver, scraper_id, bet_amount):
-    print("弹窗")
+def handle_bet_popup(driver, scraper_id, bet_amount, alert):
+    #print("弹窗")
+    a = alert.get('market_category', '').strip()
+    b = alert.get('market_status', '').strip()
     try:
         wait = WebDriverWait(driver, 15)
 
@@ -1614,6 +1617,8 @@ def handle_bet_popup(driver, scraper_id, bet_amount):
         with status_lock:
             if scraper_id in scraper_info:
                 full_info = (
+                    f"{a} | "
+                    f"{b} | "
                     f"菜单类型: {menutype} | "
                     f"比分: {score} | "
                     f"联赛: {league} | "
@@ -2595,15 +2600,28 @@ def stop_scraper():
         if "sub_threads" in scraper_info.get(scraper_id, {}):
             del scraper_info[scraper_id]["sub_threads"]
 
+        # **新增：从 market_type_to_alert_queues 队列中删除该 scraper_id**
+        for mtype, queue_list in market_type_to_alert_queues.items():
+            market_type_to_alert_queues[mtype] = [
+                (sid, alert_q) for (sid, alert_q) in queue_list if sid != scraper_id
+            ]
+            print(f"已从 {mtype} 队列中移除 Scraper ID: {scraper_id}")
+
+        # **防止索引越界**
+        for mtype in market_type_to_next_queue_index:
+            if market_type_to_next_queue_index[mtype] >= len(market_type_to_alert_queues[mtype]):
+                market_type_to_next_queue_index[mtype] = 0
+
         # 4) 更新状态为已停止
         with status_lock:
             thread_status[scraper_id] = "已停止"
-        print(f"Scraper ID {scraper_id} 已停止 (主线程 + 子线程)")
+        print(f"Scraper ID {scraper_id} 已停止 (主线程 + 子线程)，并从队列中移除。")
 
     else:
         print(f"Scraper ID {scraper_id} 未启动线程，跳过。")
 
     return jsonify({'status': 'success', 'message': f"已停止线程: {scraper_id}"}), 200
+
 
 
 @app.route('/delete_scraper', methods=['POST'])
@@ -2642,6 +2660,9 @@ def delete_scraper():
             else:
                 print(f"从 {mtype} 中移除队列: {scraper_id}")
         market_type_to_alert_queues[mtype] = new_list
+        new_len = len(new_list)
+        if market_type_to_next_queue_index[mtype] >= new_len:
+            market_type_to_next_queue_index[mtype] = 0
 
     # 3) 删除 scraper_info
     if scraper_id in scraper_info:
