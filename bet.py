@@ -26,7 +26,7 @@ from urllib3.exceptions import InsecureRequestWarning
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # 在你的 Flask 应用里，添加一个 before_request 钩子即可：
-allowed_ips = {"127.0.0.1", "188.180.86.74","160.25.20.123","160.25.20.134"}
+allowed_ips = {"127.0.0.1", "188.180.86.74", "160.25.20.123", "160.25.20.134"}
 
 # 用于跟踪抓取线程状态
 thread_status = {}
@@ -188,7 +188,7 @@ def init_driver(proxy=None):
 
     chrome_options = Options()
     # 如果需要无头模式，可以取消注释以下行
-    # chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--headless')
     chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--ignore-certificate-errors')
@@ -477,7 +477,6 @@ def start_scraper_thread(account, market_type, scraper_id=None, proxy=None):
         # 将 (scraper_id, queue) 添加进列表
         market_type_to_alert_queues[market_type].append((scraper_id, alert_queue))
 
-
     scraper_thread = threading.Thread(
         target=run_scraper,
         args=(account, market_type, scraper_id, proxy, alert_queue, login_ip),  # 传递 login_ip
@@ -745,7 +744,7 @@ def click_odds(driver, alert, scraper_id, bet_amount):
                                         f"盘口='{market_section}', 比例='{ballhead_text}', 赔率='{odds_name}'"
                                     )
                                     # 新增: 处理弹窗，并传递 scraper_id 和 bet_amount
-                                    handle_bet_popup(driver, scraper_id, bet_amount)
+                                    handle_bet_popup(driver, scraper_id, bet_amount, alert)
 
                                     clicked_ok = True
                                     break
@@ -974,7 +973,7 @@ def click_odds_new(driver, alert, scraper_id, bet_amount):
 
                                     print(f"[click_odds_new] 点击成功 => {button_id_suffix}")
                                     # 调用下注弹窗处理
-                                    handle_bet_popup(driver, scraper_id, bet_amount)
+                                    handle_bet_popup(driver, scraper_id, bet_amount, alert)
                                     clicked_ok = True
                                     break
                                 except Exception as e:
@@ -1243,7 +1242,7 @@ def click_odds_half(driver, alert, scraper_id, bet_amount):
 
                                     print(f"[1H] 点击成功 => 比例={ballhead_text}, odds={odds_name}")
                                     # 如需处理弹窗:
-                                    handle_bet_popup(driver, scraper_id, bet_amount)
+                                    handle_bet_popup(driver, scraper_id, bet_amount, alert)
                                     clicked_ok = True
                                     break
                                 except Exception as e:
@@ -1456,7 +1455,7 @@ def click_corner_odds(driver, alert, scraper_id, bet_amount):
 
                             print(f"[Corner] 点击成功 => ratio={mapped_ratio}, odds_name={odds_name}")
                             # 处理弹窗
-                            handle_bet_popup(driver, scraper_id, bet_amount)
+                            handle_bet_popup(driver, scraper_id, bet_amount, alert)
                             clicked = True
                             break
                         except Exception as e:
@@ -1475,7 +1474,7 @@ def click_corner_odds(driver, alert, scraper_id, bet_amount):
         print(f"[Corner] click_corner_odds 出错: {e}")
 
 
-def handle_bet_popup(driver, scraper_id, bet_amount):
+def handle_bet_popup(driver, scraper_id, bet_amount, alert):
     #print("弹窗")
 
     try:
@@ -1572,11 +1571,38 @@ def handle_bet_popup(driver, scraper_id, bet_amount):
             print("提取回执信息时出现问题。")
 
         # 5. 异步发送到 Java 服务器
-        def send_to_java():
-            post_url = "http://160.25.20.123:8080/api/store-data"  # 更新为你的Java服务器URL
-            with status_lock:
-                username = scraper_info[scraper_id].get("username", "unknown")
-            data = {
+        def send_to_java_alert_bet():
+            username = scraper_info[scraper_id].get("username", "unknown")
+            post_url = "http://160.25.20.123:8080/api/store-alert-bet"  # Java新接口
+            # 1) 组装 alert
+            if alert is None:
+                # 如果没有alert，就简单发bet
+                # 但最好别出现这种情况
+                alert_dict = {}
+            else:
+                # 譬如我们只提取一部分，也可直接用 alert.copy()
+                alert_dict = {
+                    "eventId": alert.get("event_id", 0),
+                    "betTypeName": alert.get("bet_type_name", ""),
+                    "oddsName": alert.get("odds_name", ""),
+                    "leagueName": alert.get("league_name", ""),
+                    "homeTeam": alert.get("home_team", ""),
+                    "awayTeam": alert.get("away_team", ""),
+                    "matchType": alert.get("match_type", ""),
+                    "oldValue": float(alert.get("old_value", 0)),
+                    "newValue": float(alert.get("new_value", 0)),
+                    "diffPoints": float(alert.get("diff_points", 0)),
+                    "timeWindow": int(alert.get("time_window", 0)),
+                    "historySeries": alert.get("history_series", ""),
+                    "homeScore": int(alert.get("home_score", 0)),
+                    "awayScore": int(alert.get("away_score", 0)),
+                    # 将score也发送
+                    "signalScore": float(alert.get("score", 0)),
+                    # alert_time 可以让Java端自动填，也可这里给
+                }
+
+            # 2) 组装 bet
+            bet_dict = {
                 "menutype": menutype,
                 "score": score,
                 "league": league,
@@ -1591,16 +1617,22 @@ def handle_bet_popup(driver, scraper_id, bet_amount):
                 "statusText": status_text,
                 "username": username
             }
+
+            combined_data = {
+                "alert": alert_dict,
+                "bet": bet_dict
+            }
+
             try:
-                response = requests.post(post_url, json=data, timeout=5)
+                response = requests.post(post_url, json=combined_data, timeout=5)
                 if response.status_code == 200:
-                    print("成功发送数据到Java服务器。")
+                    print("成功将alert+bet一起发送到Java服务器( store-alert-bet )。")
                 else:
-                    print(f"发送到Java服务器失败，状态码: {response.status_code}")
+                    print(f"发送到Java服务器失败，状态码: {response.status_code}, 内容:{response.text}")
             except Exception as e:
                 print(f"发送到Java服务器时出错: {e}")
 
-        threading.Thread(target=send_to_java, daemon=True).start()
+        threading.Thread(target=send_to_java_alert_bet(), daemon=True).start()
 
         # 6. 点击“OK”按钮关闭弹窗
         try:
@@ -1632,7 +1664,7 @@ def handle_bet_popup(driver, scraper_id, bet_amount):
                 print("记录完整投注回执信息。")
 
     except Exception as e:
-        print(f"处理投注流程时发生错误: {e}")
+        print(f"处理投注流程时发生错误")
     finally:
         close_bet_popup(driver)
 
@@ -1748,34 +1780,35 @@ def close_bet_popup(driver):
 def monitor_page_status(driver, stop_event, scraper_id, market_type):
     while not stop_event.is_set():
         time.sleep(120)  # 每2分钟检测一次
+        try:
+            found_soccer = element_exists(driver, "//span[text()='Soccer']")
+            button_id = MARKET_TYPES[market_type]  # 正常盘口 => tab_rnou, 角球盘口 => tab_cn
+            found_tab = element_exists(driver, f"//*[@id='{button_id}']")
+        except Exception as e:
+            print(f"[{scraper_id}] monitor_page_status 检测时出错: 退出监控线程。")
+            break  # 出现异常则退出循环
 
-        found_soccer = element_exists(driver, "//span[text()='Soccer']")
-        button_id = MARKET_TYPES[market_type]  # 正常盘口 => tab_rnou, 角球盘口 => tab_cn
-        found_tab = element_exists(driver, f"//*[@id='{button_id}']")
-
-        # 如果Soccer和按钮都消失 => 重登(保持bet_count等)
+        # 如果 Soccer 和对应按钮都消失，则尝试重新登录
         if not found_soccer and not found_tab:
             re_login(driver, scraper_id, market_type)
         else:
-            # 如果是角球账号: Soccer存在且tab_cn不见 => 暂停收Alert；反之如再次出现 => 恢复
+            # 针对角球盘口的特殊逻辑
             if "Corners" in market_type:
                 if found_soccer and not found_tab:
                     with status_lock:
                         scraper_info[scraper_id]["allow_alert"] = False
-                        print(f"[{scraper_id}] tab_cn消失, 角球账号暂停接收Alert.")
+                    print(f"[{scraper_id}] tab_cn消失, 角球账号暂停接收Alert.")
                 elif found_soccer and found_tab:
-                    # 若之前allow_alert是False => 恢复
                     with status_lock:
-                        if not scraper_info[scraper_id]["allow_alert"]:
-                            # 先点击一下tab_cn按钮
+                        if not scraper_info[scraper_id].get("allow_alert", True):
                             try:
                                 WebDriverWait(driver, 5).until(
                                     EC.element_to_be_clickable((By.ID, button_id))
                                 ).click()
-                            except:
-                                pass
+                            except Exception as e:
+                                print(f"[{scraper_id}] monitor_page_status 点击 {button_id} 时出错: {e}")
                             scraper_info[scraper_id]["allow_alert"] = True
-                            print(f"[{scraper_id}] 角球账号检测到tab_cn重新出现, 恢复接收Alert.")
+                    print(f"[{scraper_id}] 角球账号检测到tab_cn重新出现, 恢复接收Alert.")
 
 
 def element_exists(driver, xpath):
@@ -1783,6 +1816,9 @@ def element_exists(driver, xpath):
         driver.find_element(By.XPATH, xpath)
         return True
     except NoSuchElementException:
+        return False
+    except Exception as e:
+        print(f"[element_exists] 出现异常, xpath: {xpath}")
         return False
 
 
@@ -2618,7 +2654,6 @@ def stop_scraper():
         print(f"Scraper ID {scraper_id} 未启动线程，跳过。")
 
     return jsonify({'status': 'success', 'message': f"已停止线程: {scraper_id}"}), 200
-
 
 
 @app.route('/delete_scraper', methods=['POST'])
