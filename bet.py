@@ -1573,7 +1573,7 @@ def handle_bet_popup(driver, scraper_id, bet_amount, alert):
         # 5. 异步发送到 Java 服务器
         def send_to_java_alert_bet():
             username = scraper_info[scraper_id].get("username", "unknown")
-            post_url = "http://160.25.20.123:8080/api/store-alert-bet"  # Java新接口
+            post_url = "http://localhost:8080/api/store-alert-bet"
             # 1) 组装 alert
             if alert is None:
                 # 如果没有alert，就简单发bet
@@ -2487,6 +2487,7 @@ def get_category_status():
 @app.route('/receive_data', methods=['POST'])
 def receive_data():
     data = request.get_json()
+    print(data)
     if not data:
         return jsonify({'status': 'error', 'message': 'No JSON data received'}), 400
 
