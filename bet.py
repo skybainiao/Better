@@ -1632,7 +1632,7 @@ def handle_bet_popup(driver, scraper_id, bet_amount, alert):
             except Exception as e:
                 print(f"发送到Java服务器时出错: {e}")
 
-        threading.Thread(target=send_to_java_alert_bet(), daemon=True).start()
+        threading.Thread(target=send_to_java_alert_bet, daemon=True).start()
 
         # 6. 点击“OK”按钮关闭弹窗
         try:
