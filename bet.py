@@ -62,31 +62,6 @@ thread_control_events = {}
 # 忽略 InsecureRequestWarning（可选）
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
-# 定义IP池，每个代理格式为 "protocol://username:password@host:port"
-#IP_POOL = {
-#   "http://user-spz4nq4hh5-ip-122.8.88.216:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10001": {"status": "active",
-#                                                                                             "failures": 0},
-#   "http://user-spz4nq4hh5-ip-122.8.86.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10002": {"status": "active",
-#                                                                                             "failures": 0},
-#"http://user-spz4nq4hh5-ip-122.8.15.166:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10003": {"status": "active",
-#"failures": 0},
-#   "http://user-spz4nq4hh5-ip-122.8.87.234:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10004": {"status": "active",
-#                                                                                             "failures": 0},
-#"http://user-spz4nq4hh5-ip-122.8.16.212:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10005": {"status": "active",
-#"failures": 0},
-#   "http://user-spz4nq4hh5-ip-122.8.83.60:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10006": {"status": "active",
-#                                                                                            "failures": 0},
-#   "http://user-spz4nq4hh5-ip-122.8.83.139:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10007": {"status": "active",
-#                                                                                             "failures": 0},
-#   "http://user-spz4nq4hh5-ip-122.8.87.216:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10008": {"status": "active",
-#                                                                                             "failures": 0},
-#   "http://user-spz4nq4hh5-ip-122.8.87.251:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10009": {"status": "active",
-#                                                                                             "failures": 0},
-#"http://user-spz4nq4hh5-ip-122.8.16.227:jX5ed7Etx32VtrzCm_@isp.visitxiangtan.com:10010": {"status": "active",
-#"failures": 0}
-#}
-# 按顺序分配代理的相关变量
-#proxy_list = list(IP_POOL.keys())
 current_proxy_index = 0
 
 # 创建一个队列来管理启动任务
@@ -290,6 +265,19 @@ def check_forbidden_page(driver):
 
 def navigate_to_football(driver):
     wait = WebDriverWait(driver, 150)
+    # --- 新增：先尝试点击弹窗 OK 按钮 ---
+    try:
+        # 如果在 3 秒内可以找到并点击到 OK 按钮，就点击
+        ok_button = WebDriverWait(driver, 3).until(
+            EC.element_to_be_clickable((By.ID, 'close_btn1'))
+        )
+        ok_button.click()
+        time.sleep(1)  # 稍作等待，确保弹窗完全消失
+        print("系统消息弹窗已关闭")
+    except TimeoutException:
+        # 若找不到该按钮就跳过
+        pass
+
     try:
         # 点击足球按钮
         football_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//div[span[text()="Soccer"]]')))
@@ -1496,6 +1484,7 @@ def handle_bet_popup(driver, scraper_id, bet_amount, alert):
             popup_ratio_text = ratio_tt.text.strip()  # 例如 "5 / 5.5"
             # 去掉中间可能的空格，使得 "5 / 5.5" => "5/5.5"
             popup_ratio_clean = popup_ratio_text.replace(' ', '')
+            popup_ratio_clean = popup_ratio_clean.lstrip('+')
         except NoSuchElementException:
             print("未找到 bet_chose_con 元素，无法对比盘口，继续投注逻辑。")
             popup_ratio_clean = ""  # 找不到就给个空字符串
@@ -1870,7 +1859,7 @@ def element_exists(driver, xpath):
     except NoSuchElementException:
         return False
     except Exception as e:
-        print(f"[element_exists] 出现异常, xpath: {xpath}")
+        print(f"[element_exists] 出现异常, xpath: {1}")
         return False
 
 
@@ -2780,4 +2769,4 @@ def get_status():
 
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5021)
+    app.run(host='0.0.0.0', port=5031)
