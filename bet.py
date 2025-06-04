@@ -116,27 +116,6 @@ category_status = {
 category_lock = threading.Lock()
 
 
-#def get_sequential_proxy():
-#   global current_proxy_index
-#  with status_lock:
-#     if current_proxy_index >= len(proxy_list):
-#        raise Exception("所有代理已被封禁或已使用完毕")
-#   proxy = proxy_list[current_proxy_index]
-#  current_proxy_index += 1
-# IP_POOL[proxy]['status'] = 'used'  # 标记为已使用
-#return proxy
-
-
-#def get_new_proxy():
-#   global current_proxy_index
-#  with status_lock:
-#     if current_proxy_index >= len(proxy_list):
-#        print("没有可用的代理来重启线程")
-#       return None
-#  new_proxy = proxy_list[current_proxy_index]
-# current_proxy_index += 1
-#IP_POOL[new_proxy]['status'] = 'used'  # 标记为已使用
-#return new_proxy
 
 
 def init_driver(proxy=None):
