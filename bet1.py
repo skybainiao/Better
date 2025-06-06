@@ -96,7 +96,7 @@ def init_driver():
     """初始化Chrome浏览器驱动"""
     print("初始化浏览器驱动...")
     chrome_options = Options()
-    #chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--headless')
     chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--ignore-certificate-errors')
